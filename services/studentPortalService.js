@@ -36,7 +36,7 @@ export const listenToStudentPortalData = (onDataUpdate, onError) => {
           return;
         }
 
-        // 2. Fallback: check the users collection (registered via register.html)
+        // 2. Fallback: check the users collection (credentials given by admin)
         try {
           const userDocRef = doc(db, "users", user.uid);
           const userDoc = await getDoc(userDocRef);
