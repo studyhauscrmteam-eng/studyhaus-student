@@ -186,11 +186,11 @@ export const initAuthGuard = () => {
       }
 
       if (!isPublicPage) {
-        // Student-only copy: no /login.html — everything goes to student login.
+        // Student-only copy: everything goes to normal login.
         if (currentPath.startsWith("/student/")) {
-          window.location.href = "/student-login.html";
+          window.location.href = "/login.html";
         } else {
-          window.location.href = "/student-login.html";
+          window.location.href = "/login.html";
         }
       } else {
         if (loader) loader.style.display = "none";

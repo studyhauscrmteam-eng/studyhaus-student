@@ -15,7 +15,7 @@ export const handleLogout = async () => {
     await authServiceLogout();
 
     // 3. Redirect to login page
-    window.location.href = "/student-login.html";
+    window.location.href = "/login.html";
 
   } catch (error) {
     console.error("Logout Error:", error);
