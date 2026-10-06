@@ -2,8 +2,6 @@ import { onAuthStateChanged, logout } from "../services/authService.js";
 import { getDocument } from "../services/firestoreService.js";
 import { getRedirectUrlForRole } from "./login.js?v=login2";
 import { protectRoute } from "./middleware.js?v=mid2";
-import { collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "../firebase/firebase.js";
 
 /**
  * Retry a Firestore read with exponential backoff.
@@ -50,45 +48,24 @@ export const initAuthGuard = () => {
         // Fetch role if not in localStorage or to ensure it's up to date
         let role = localStorage.getItem("userRole");
         if (!role) {
-          // Role not cached — fetch from Firestore
+          // Role not cached — fetch from Firestore (student credential only:
+          // admitted students live at students/{uid}, pending/new at users/{uid}).
           let userDoc = null;
           let docId = user.uid;
 
-          // 1. Canonical 'users' collection
+          // 1. Admitted students.
           try {
-            userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
+            userDoc = await retryWithBackoff(() => getDocument("students", user.uid));
           } catch (_) { /* ignore permission errors */ }
 
-          // 2. Role-named collections (Manager, Employee, etc.) by UID.
-          //    "students" first: admitted students live at students/{uid} and
-          //    the other collections deny reads for them (slow retries).
-          if (!userDoc || !userDoc.role) {
-            const roleCollections = ["students", "Manager", "Employee", "Owner", "Admin"];
-            for (const col of roleCollections) {
-              try {
-                const doc = await getDocument(col, user.uid);
-                if (doc) { userDoc = doc; break; }
-              } catch (_) { /* ignore permission errors for unauthorized collections */ }
-            }
+          // 2. Pending/new users (admin gives credentials).
+          if (!userDoc) {
+            try {
+              userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
+            } catch (_) { /* ignore permission errors */ }
           }
 
-          // 3. Email-based search across all known collections
-          if (!userDoc || !userDoc.role) {
-            const searchCollections = ["users", "Manager", "Employee", "students"];
-            for (const col of searchCollections) {
-              try {
-                const q = query(collection(db, col), where("email", "==", user.email));
-                const snap = await getDocs(q);
-                if (!snap.empty) {
-                  userDoc = snap.docs[0].data();
-                  docId = snap.docs[0].id;
-                  break;
-                }
-              } catch (_) { /* skip missing collections */ }
-            }
-          }
-
-          // 4. Default to Student if role field is missing
+          // 3. Default to Student if doc found but role field is missing
           if (userDoc && !userDoc.role) {
             userDoc.role = "Student";
           }
