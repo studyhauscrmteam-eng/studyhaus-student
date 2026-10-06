@@ -33,7 +33,7 @@ export const initAuthGuard = () => {
   if (loader) loader.style.display = "flex";
 
   const currentPath = window.location.pathname;
-  const isPublicPage = currentPath.endsWith("login.html") || currentPath.endsWith("forgot-password.html") || currentPath.endsWith("register.html") || currentPath.endsWith("unauthorized.html");
+  const isPublicPage = currentPath === "/" || currentPath.endsWith("/index.html") || currentPath.endsWith("login.html") || currentPath.endsWith("forgot-password.html") || currentPath.endsWith("register.html") || currentPath.endsWith("unauthorized.html");
 
   onAuthStateChanged(async (user) => {
     if (user) {
