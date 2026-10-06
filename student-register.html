@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <title>Student Register — Studyhaus</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f8fafc; font-family: 'Inter', system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem 0; }
+    .auth-layout { width: 100%; max-width: 500px; padding: 2rem 1.5rem; display: flex; flex-direction: column; align-items: center; }
+    
+    .auth-logo { text-align: center; margin-bottom: 2rem; }
+    .auth-logo-flex { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 4px; }
+    .auth-logo-icon { width: 34px; height: 34px; background: #059669; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; }
+    .auth-logo-text { font-weight: 700; font-size: 1.25rem; color: #0f172a; }
+    .auth-logo-sub { font-size: 0.85rem; color: #64748b; }
+
+    .auth-card { background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -2px rgba(0,0,0,0.02); width: 100%; border: 1px solid #e2e8f0; padding: 2rem; }
+    .auth-title { font-size: 1.1rem; font-weight: 600; color: #0f172a; margin-bottom: 0.5rem; }
+    .auth-desc { font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; line-height: 1.4; }
+    .auth-desc a { color: #059669; text-decoration: none; font-weight: 500; }
+    .auth-desc a:hover { text-decoration: underline; }
+
+    .auth-tabs { display: flex; background: #f1f5f9; border-radius: 8px; padding: 4px; margin-bottom: 1.5rem; }
+    .auth-tab { flex: 1; text-align: center; font-size: 0.85rem; font-weight: 500; color: #64748b; padding: 8px 12px; border-radius: 6px; text-decoration: none; transition: all 0.2s; }
+    .auth-tab.active { color: #0f172a; background: white; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+    .form-group { margin-bottom: 1.25rem; }
+    .form-group label { display: block; font-size: 0.8rem; font-weight: 500; color: #0f172a; margin-bottom: 8px; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #e2e8f0; background: #f8fafc; font-family: inherit; font-size: 0.9rem; color: #0f172a; outline: none; transition: border-color 0.2s, background 0.2s; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #059669; background: white; }
+    .form-group input::placeholder, .form-group textarea::placeholder { color: #94a3b8; }
+    .form-group textarea { resize: vertical; }
+
+    .form-hint { font-size: 0.75rem; color: #64748b; margin-bottom: 1.25rem; line-height: 1.4; }
+
+    .btn-submit { width: 100%; background: #059669; color: white; border: none; border-radius: 8px; padding: 12px; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: background 0.2s; }
+    .btn-submit:hover { background: #047857; }
+    .btn-submit:disabled { opacity: 0.7; cursor: not-allowed; }
+
+    #error-message { color: #ef4444; font-size: 0.85rem; margin-bottom: 1rem; display: none; text-align: center; background: #fef2f2; border: 1px solid #fca5a5; padding: 8px; border-radius: 6px; }
+    
+    #global-loader { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.8); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; }
+    .spinner { width: 36px; height: 36px; border: 3px solid #e2e8f0; border-top-color: #059669; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .section-title { font-size: 0.95rem; font-weight: 600; color: #0f172a; margin-top: 1.5rem; margin-bottom: 1rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div id="global-loader">
+    <div class="spinner"></div>
+    <div style="font-weight: 500; color: #0f172a; font-size: 0.9rem;">Creating account...</div>
+  </div>
+
+  <div class="auth-layout">
+    <div class="auth-logo">
+      <div class="auth-logo-flex">
+        <div class="auth-logo-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+            <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/>
+            <path d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14zm-4 6v-7.5l4-2.222"/>
+          </svg>
+        </div>
+        <div class="auth-logo-text">Studyhaus</div>
+      </div>
+      <div class="auth-logo-sub">Student Portal</div>
+    </div>
+
+    <div class="auth-card">
+      <h1 class="auth-title">Create your student account</h1>
+      <p class="auth-desc">Register to access your portal.</p>
+
+      <div class="auth-tabs">
+        <a href="student-login.html" class="auth-tab" data-i18n="btn.login">Sign in</a>
+        <a href="student-register.html" class="auth-tab active" data-i18n="btn.register">Create account</a>
+      </div>
+
+      <div id="error-message"></div>
+
+      <form id="register-form">
+        <h3 class="section-title" style="margin-top: 0; border-bottom: none;">Account Credentials</h3>
+        
+        <div class="form-group">
+          <label><span data-i18n="form.studentName">Student Name</span> <span style="color:#e53e3e;">*</span></label>
+          <input type="text" id="fullName" required />
+        </div>
+        <div class="form-group">
+          <label><span data-i18n="form.email">Phone Number / Email</span> <span style="color:#e53e3e;">*</span></label>
+          <input type="text" id="email" required placeholder="9876543210 or student@example.com" />
+        </div>
+        <div class="form-group" style="margin-bottom: 6px;">
+          <label><span data-i18n="form.password">Password</span></label>
+          <input type="password" id="password" required placeholder="••••••••" minlength="8" />
+        </div>
+        <p class="form-hint" style="margin-bottom: 1.5rem;">Minimum 8 characters.</p>
+
+        <h3 class="section-title">Document Uploads <span style="color:var(--text-muted);font-weight:400;text-transform:none;margin-left:4px;">(Optional · stored securely)</span></h3>
+        <div id="doc-upload-section" style="margin-bottom: 1.5rem;"></div>
+
+        
+        <button type="submit" class="btn-submit" id="submit-btn" data-i18n="btn.register">Create account</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+      }
+    }
+  </script>
+  
+  <script>
+    // Students no longer self-register — admin creates portal logins.
+    // Old "Create account" links land here, so send them to the login page.
+    window.location.replace("./student-login.html");
+  </script>
+
+  <script type="module">
+    import "./services/translationService.js";
+    import { initAuthGuard } from "./auth/guard.js";
+    import { handleRegister } from "./auth/register.js";
+    import { logout, phoneToAuthEmail, isValidPhone } from "./services/authService.js";
+    import { initDocumentUploads } from "./services/documentUploadService.js";
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const isFromLibrary = urlParams.has('name') || urlParams.has('email') || urlParams.has('phone');
+    
+    if (isFromLibrary) {
+      // Force logout if coming from library site so they can register as a new user
+      await logout().catch(() => {});
+    }
+
+    initAuthGuard();
+    initDocumentUploads("doc-upload-section");
+
+    const form = document.getElementById("register-form");
+    const errorDiv = document.getElementById("error-message");
+    const loader = document.getElementById("global-loader");
+    const submitBtn = document.getElementById("submit-btn");
+
+    // Pre-fill fields from URL parameters (e.g. from website booking form)
+    if (urlParams.has('name')) {
+      document.getElementById('fullName').value = urlParams.get('name');
+      sessionStorage.setItem('pendingName', urlParams.get('name'));
+    }
+    if (urlParams.has('email')) {
+      document.getElementById('email').value = urlParams.get('email');
+      sessionStorage.setItem('pendingEmail', urlParams.get('email'));
+    }
+    if (urlParams.has('phone')) {
+      document.getElementById('email').value = urlParams.get('phone');
+      sessionStorage.setItem('pendingPhone', urlParams.get('phone'));
+    }
+    if (urlParams.has('plan')) {
+      sessionStorage.setItem('pendingPlan', urlParams.get('plan'));
+    }
+    if (urlParams.has('message')) {
+      sessionStorage.setItem('pendingMessage', urlParams.get('message'));
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorDiv.style.display = "none";
+
+      // Mandatory field validation
+      const fullName = document.getElementById("fullName").value.trim();
+      const identifier = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      if (!fullName) {
+        errorDiv.textContent = "Student Name is required.";
+        errorDiv.style.display = "block";
+        return;
+      }
+      if (!identifier) {
+        errorDiv.textContent = "Phone number or Email is required.";
+        errorDiv.style.display = "block";
+        return;
+      }
+
+      // Validate phone if it's a phone number
+      if (/^[\d\s\-\+\(\)]{10,}$/.test(identifier) && !isValidPhone(identifier)) {
+        errorDiv.textContent = "Invalid phone number. Please enter a valid 10-digit number.";
+        errorDiv.style.display = "block";
+        return;
+      }
+
+      loader.style.display = "flex";
+      submitBtn.disabled = true;
+
+      const role = "Student";
+      
+      // Convert phone to auth email format for Firebase Auth
+      const authEmail = phoneToAuthEmail(identifier);
+      
+      const studentData = {
+        loginCredentials: identifier + " / " + password
+      };
+
+      try {
+        await handleRegister(fullName, authEmail, password, role, studentData);
+      } catch (error) {
+        loader.style.display = "none";
+        submitBtn.disabled = false;
+        errorDiv.textContent = error.message;
+        errorDiv.style.display = "block";
+      }
+    });
+  </script>
+</body>
+</html>

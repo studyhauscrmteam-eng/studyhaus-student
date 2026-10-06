@@ -1,0 +1,228 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function userExists() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function hasRole(roles) {
+      return userExists() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in roles;
+    }
+    // Include legacy variants: some docs store "Admin"/"Owner" instead of "Owner/Admin"
+    function isStaff() {
+      return hasRole(['Owner/Admin', 'Owner', 'Admin', 'Manager', 'Employee']);
+    }
+    function isManagerUp() {
+      return hasRole(['Owner/Admin', 'Owner', 'Admin', 'Manager']);
+    }
+    function isOwner() {
+      return hasRole(['Owner/Admin', 'Owner', 'Admin']);
+    }
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+    function isOwnDoc() {
+      return signedIn() && resource.data.get('studentId', null) == request.auth.uid;
+    }
+
+    // ---------- users ----------
+    // Register writes users/{uid} right after Auth creation, so self-create must not
+    // depend on get(users/uid) (doc doesn't exist yet).
+    match /users/{userId} {
+      allow create: if isSelf(userId);
+      allow read: if isSelf(userId) || isStaff();
+      allow update: if isSelf(userId) || isManagerUp();
+      allow delete: if isOwner();
+    }
+
+    // Legacy role-named collections used as login fallback (read-only fallback).
+    match /Manager/{docId} {
+      allow read: if signedIn() && (request.auth.uid == docId || isStaff());
+      allow write: if isManagerUp();
+    }
+    match /Employee/{docId} {
+      allow read: if signedIn() && (request.auth.uid == docId || isStaff());
+      allow write: if isManagerUp();
+    }
+    match /Owner/{docId} {
+      allow read: if signedIn() && (request.auth.uid == docId || isStaff());
+      allow write: if isOwner();
+    }
+    match /Admin/{docId} {
+      allow read: if signedIn() && (request.auth.uid == docId || isStaff());
+      allow write: if isOwner();
+    }
+
+    // ---------- students (FIXED: admins could not read at all before) ----------
+    match /students/{studentId} {
+      allow read: if isStaff() || isSelf(studentId);
+      allow create: if signedIn();
+      allow update: if isStaff() || isSelf(studentId);
+      allow delete: if isManagerUp();
+    }
+
+    // ---------- admissions ----------
+    match /admissions/{admissionId} {
+      allow create: if signedIn();
+      allow read: if isStaff();
+      allow update, delete: if isManagerUp();
+    }
+
+    // ---------- payments (students can create + read their own requests) ----------
+    match /payments/{paymentId} {
+      allow read: if isStaff() || isOwnDoc();
+      allow create: if signedIn() && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid);
+      allow update, delete: if isStaff();
+    }
+
+    // ---------- seats (students may flip status during check-in/out + self reserve) ----------
+    match /seats/{seatId} {
+      allow read: if signedIn();
+      allow create, delete: if isStaff();
+      allow update: if isStaff() || (
+        signedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'lastUpdated', 'assignedStudentId', 'assignedStudentName', 'planType']) &&
+        request.resource.data.status in ['Available', 'Occupied', 'Reserved'] &&
+        resource.data.status in ['Available', 'Occupied', 'Reserved', 'Maintenance', 'Inactive'] &&
+        (resource.data.get('assignedStudentId', null) == null || resource.data.get('assignedStudentId', null) == request.auth.uid) &&
+        (request.resource.data.get('assignedStudentId', null) == null || request.resource.data.get('assignedStudentId', null) == request.auth.uid) &&
+        request.resource.data.get('seatNumber', resource.data.get('seatNumber', null)) == resource.data.get('seatNumber', null) &&
+        request.resource.data.get('floor', resource.data.get('floor', null)) == resource.data.get('floor', null)
+      );
+    }
+
+    // ---------- membership plans ----------
+    match /membershipPlans/{planId} {
+      allow read: if signedIn();
+      allow write: if isManagerUp();
+    }
+
+    // ---------- attendance (students can check in/out their own sessions) ----------
+    match /attendance/{attendanceId} {
+      allow read: if isStaff() || isOwnDoc();
+      allow create: if signedIn() && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid);
+      allow update: if isStaff() || (
+        signedIn() &&
+        resource.data.get('studentId', null) == request.auth.uid &&
+        request.resource.data.get('studentId', null) == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkOut', 'duration', 'status', 'updatedAt', 'autoClosedReason'])
+      );
+      allow delete: if isStaff();
+    }
+
+    // ---------- settings (students need read for QR code + display) ----------
+    match /settings/{settingId} {
+      allow read: if signedIn();
+      allow write: if isManagerUp();
+    }
+
+    // ---------- documents ----------
+    match /documents/{documentId} {
+      allow read: if isStaff() || isOwnDoc();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+
+    match /globalDocuments/{documentId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+
+    match /globalDocumentChunks/{chunkId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+
+    match /studentDocuments/{studentId} {
+      allow read: if isStaff() || isSelf(studentId);
+      allow create: if signedIn() && (isSelf(studentId) || isStaff());
+      allow update, delete: if isStaff() || isSelf(studentId);
+    }
+
+    // ---------- complaints ----------
+    match /complaints/{complaintId} {
+      allow read: if isStaff() || isOwnDoc();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+
+    // ---------- renewals ----------
+    match /renewals/{renewalId} {
+      allow read: if isStaff() || isOwnDoc();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+
+    // ---------- counters (sequential student IDs — atomic via transaction) ----------
+    match /counters/{counterId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if isOwner();
+    }
+
+    // ---------- in-app admin notifications ----------
+    match /notifications/{notifId} {
+      allow create: if signedIn();
+      allow read: if isStaff();
+      // Managers+ can edit anything; all staff may only flip the read flag
+      // (so opening Notifications clears the bell for everyone).
+      allow update: if isManagerUp() || (
+        isStaff() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+      );
+      allow delete: if isManagerUp();
+    }
+
+    // ---------- outgoing mail queue (Trigger Email extension) ----------
+    match /mail/{mailId} {
+      allow create: if signedIn();
+      allow read: if isStaff();
+      allow update, delete: if isStaff();
+    }
+
+    // ---------- MISSING collections (were default-deny = permission-denied) ----------
+    match /visitors/{visitorId} {
+      allow read, write: if isStaff();
+    }
+    match /visitorPurposes/{purposeId} {
+      allow read: if signedIn();
+      allow write: if isStaff();
+    }
+    match /expenses/{expenseId} {
+      allow read: if isStaff();
+      allow write: if isManagerUp();
+    }
+    match /expenseCategories/{categoryId} {
+      allow read: if signedIn();
+      allow write: if isManagerUp();
+    }
+    match /messageTemplates/{templateId} {
+      allow read, write: if isStaff();
+    }
+    match /messageLogs/{logId} {
+      allow read, write: if isStaff();
+    }
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow write: if isStaff();
+    }
+    match /reminders/{reminderId} {
+      allow read, write: if isStaff();
+    }
+    match /staff/{staffId} {
+      allow read: if isStaff();
+      allow write: if isManagerUp();
+    }
+    match /tasks/{taskId} {
+      allow read, write: if isStaff();
+    }
+  }
+}

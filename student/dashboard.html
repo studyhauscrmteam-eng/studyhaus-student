@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+  <title>Studyhaus — Reading Space CRM</title>
+  <meta name="description"
+    content="Premium management console for a single reading space: students, seats, memberships, payments, attendance and more." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="../style.css" />
+</head>
+
+<body data-default-page="student-portal">
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon"
+          style="background: var(--primary); color: white; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <div style="font-weight: 700; font-size: 1.1rem; color: var(--text-primary); line-height: 1.2;">Studyhaus
+          </div>
+          <div style="font-size: 0.75rem; color:var(--text-muted); font-weight: 500;">Reading Space CRM</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <!-- Overview -->
+        <div class="nav-group">
+          <div class="nav-group-label" data-i18n="nav.overview">Overview</div>
+          <a class="nav-item active" data-page="student-portal" onclick="navigate('student-portal')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+            </svg>
+            <span data-i18n="menu.dashboard">Dashboard</span>
+          </a>
+          <a class="nav-item" data-page="student-payments" onclick="navigate('student-payments')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="1" x2="12" y2="23" />
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+            <span data-i18n="menu.paymentsRenewals">Payments & Renewals</span>
+          </a>
+          <a class="nav-item" data-page="student-attendance" onclick="navigate('student-attendance')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            <span data-i18n="menu.attendance">Attendance</span>
+          </a>
+          <a class="nav-item" data-page="student-complaints" onclick="navigate('student-complaints')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <span data-i18n="menu.complaints">Complaints</span>
+          </a>
+          <a class="nav-item" data-page="notifications" onclick="navigate('notifications')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            <span data-i18n="menu.notifications">Notifications</span>
+            <span class="nav-badge" style="display:none;">0</span>
+          </a>
+
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-mini">
+          <div class="avatar" id="current-user-avatar">U</div>
+          <div class="user-mini-info">
+            <div class="user-mini-name" id="current-user-name">User</div>
+            <div class="user-mini-role" id="current-user-role">Role</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <!-- Topbar -->
+      <header class="topbar">
+        <button class="menu-btn" onclick="toggleSidebar()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <div class="topbar-search" id="topbar-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input type="text" placeholder="Search students, seats, receipts…" />
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-btn" onclick="navigate('notifications')" title="Notifications"
+            style="position: relative;" id="topbar-notif-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            <span id="topbar-notif-dot"
+              style="position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; background-color: #ef4444; border-radius: 50%; display: none;"></span>
+          </button>
+          <div class="lang-dropdown" id="lang-dropdown">
+            <button class="lang-btn" onclick="toggleLangMenu(event)" title="Language" aria-haspopup="menu">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>
+              <span id="lang-current">EN</span>
+              <svg class="lang-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9" /></svg>
+            </button>
+            <div class="lang-menu" id="lang-menu" role="menu">
+              <button class="lang-item" data-lang="en" onclick="selectLanguage('en')"><span>English</span><span class="tick">✓</span></button>
+              <button class="lang-item" data-lang="gu" onclick="selectLanguage('gu')"><span>Gujarati</span><span class="tick">✓</span></button>
+            </div>
+          </div>
+          <button class="icon-btn theme-toggle" id="theme-toggle" onclick="toggleTheme()"
+            title="Toggle light/dark mode">
+            <svg id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
+              height="18">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+            <svg id="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
+              height="18" style="display:none">
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+          </button>
+          <div class="topbar-user" tabindex="0">
+            <div class="topbar-avatar" id="topbar-user-avatar" style="background:var(--primary); color:#fff; overflow:hidden;">S</div>
+            <span class="topbar-username" id="topbar-user-name">Student</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
+              style="color:var(--text-muted)">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+
+            <div class="user-dropdown">
+              <div class="dropdown-header">Signed In As <span id="topbar-user-role">Student</span></div>
+              <button class="dropdown-signout" onclick="window.logout()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                <span>Sign out</span>
+                <svg class="so-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Pages -->
+      <main class="page-content" id="page-content">
+        <!-- Student Portal Page (Overview) -->
+        <div class="page" id="page-student-portal"></div>
+
+        <!-- Student Payments Page -->
+        <div class="page" id="page-student-payments"></div>
+
+        <!-- Student Attendance Page -->
+        <div class="page" id="page-student-attendance"></div>
+
+        <!-- Student Complaints Page -->
+        <div class="page" id="page-student-complaints"></div>
+
+        <div class="page" id="page-notifications">
+          <div class="page-header">
+            <div>
+              <h1>Notifications</h1>
+              <p class="page-subtitle">Announcements & Alerts</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="notif-list">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <!-- Firebase Import Map for native browser ES modules -->
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app":      "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/auth":     "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
+        "firebase/firestore":"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+      }
+    }
+  </script>
+  <script src="../app.js"></script>
+  <script type="module" src="../firebase-entry.js"></script>
+</body>
+
+</html>
