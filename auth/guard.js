@@ -28,13 +28,14 @@ const retryWithBackoff = async (fn, retries = 3, delay = 500) => {
  * - Runs middleware to check role permissions if authenticated.
  */
 export const initAuthGuard = () => {
-  // Show global loading state if a container exists
-  const loader = document.getElementById("global-loader");
-  if (loader) loader.style.display = "flex";
-
   const currentPath = window.location.pathname;
   const normPath = (currentPath.replace(/\/$/, "") || "/").toLowerCase();
-  const isPublicPage = normPath === "/" || normPath === "/index" || normPath.endsWith("/index.html") || normPath === "/login" || normPath.endsWith("login.html") || normPath === "/forgot-password" || normPath.endsWith("forgot-password.html") || normPath === "/register" || normPath.endsWith("register.html") || normPath === "/unauthorized" || normPath.endsWith("unauthorized.html");
+  const isPublicPage = normPath === "/" || normPath === "/index" || normPath.endsWith("/index.html") || normPath === "/login" || normPath.endsWith("login.html") || normPath === "/forgot-password" || normPath.endsWith("forgot-password.html") || normPath === "/unauthorized" || normPath.endsWith("unauthorized.html");
+
+  // Only overlay the loader on protected pages. Public login renders
+  // immediately with no white blink; loader still shows on Sign in submit.
+  const loader = document.getElementById("global-loader");
+  if (loader && !isPublicPage) loader.style.display = "flex";
 
   // Wait briefly for Firebase session restore before bouncing protected
   // pages. First onAuthStateChanged(null) fires while restoring — immediate
