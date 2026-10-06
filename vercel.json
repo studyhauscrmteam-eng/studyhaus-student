@@ -1,7 +1,3 @@
 {
-  "cleanUrls": true,
-  "redirects": [
-    { "source": "/student-login.html", "destination": "/login.html", "permanent": true },
-    { "source": "/student-register.html", "destination": "/register.html", "permanent": true }
-  ]
+  "cleanUrls": true
 }
