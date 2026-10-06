@@ -28,11 +28,15 @@ export const getRedirectUrlForRole = (rawRole) => {
   }
 
   switch (role) {
+    case ROLES.OWNER:
+      return "/admin/dashboard.html";
+    case ROLES.MANAGER:
+      return "/manager/dashboard.html";
+    case ROLES.EMPLOYEE:
+      return "/employee/dashboard.html";
     case ROLES.STUDENT:
-      return "/student/dashboard.html";
+      return "/unauthorized.html";
     default:
-      // Student-only copy: staff dashboards (admin/manager/employee) do not
-      // exist here. Anything that is not a Student goes to unauthorized.
       return "/unauthorized.html";
   }
 };
@@ -42,70 +46,85 @@ export const getRedirectUrlForRole = (rawRole) => {
  * @returns {Promise<{userDoc, docId}>}
  */
 const resolveUserRole = async (user) => {
-    let userDoc = null;
-    let docId = user.uid;
+  let userDoc = null;
+  let docId = user.uid;
 
-    // 1. Check the canonical 'users' collection first (where register.js writes)
-    try {
-      userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
-    } catch (_) { /* ignore permission errors */ }
+  // 1. Check the canonical 'users' collection first (where register.js writes)
+  try {
+    userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
+  } catch (_) { /* ignore permission errors */ }
 
-    // 2. Also check role-named collections (Manager, Employee, Owner/Admin)
-    //    — handles documents created manually in Firestore by an admin.
-    //    "students" is checked FIRST: admitted students have students/{uid}
-    //    and no users doc, and the other collections deny reads for them
-    //    (permission-denied retries would stall the login for seconds).
-    if (!userDoc || !userDoc.role) {
-      const roleCollections = ["students", "Manager", "Employee", "Owner", "Admin"];
-      for (const col of roleCollections) {
-        try {
-          const doc = await retryWithBackoff(() => getDocument(col, user.uid));
-          if (doc) { userDoc = doc; break; }
-        } catch (_) { /* ignore permission errors for unauthorized collections */ }
-      }
+  // 2. Also check role-named collections (Manager, Employee, Owner/Admin)
+  //    — handles documents created manually in Firestore by an admin.
+  //    "students" is checked FIRST: admitted students have students/{uid}
+  //    and no users doc, and the other collections deny reads for them
+  //    (permission-denied retries would stall the login for seconds).
+  if (!userDoc || !userDoc.role) {
+    const roleCollections = ["students", "Manager", "Employee", "Owner", "Admin"];
+    for (const col of roleCollections) {
+      try {
+        const doc = await retryWithBackoff(() => getDocument(col, user.uid));
+        if (doc) { userDoc = doc; break; }
+      } catch (_) { /* ignore permission errors for unauthorized collections */ }
     }
+  }
 
-    // 3. Email-based search across role collections for manually created users
-    if (!userDoc || !userDoc.role) {
-      const searchCollections = ["users", "Manager", "Employee", "students"];
-      for (const col of searchCollections) {
-        try {
-          const q = query(collection(db, col), where("email", "==", user.email));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            userDoc = snap.docs[0].data();
-            docId = snap.docs[0].id;
-            break;
-          }
-        } catch (_) { /* collection may not exist, skip */ }
-      }
+  // 3. Email-based search across role collections for manually created users
+  if (!userDoc || !userDoc.role) {
+    const searchCollections = ["users", "Manager", "Employee", "students"];
+    for (const col of searchCollections) {
+      try {
+        const q = query(collection(db, col), where("email", "==", user.email));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          userDoc = snap.docs[0].data();
+          docId = snap.docs[0].id;
+          break;
+        }
+      } catch (_) { /* collection may not exist, skip */ }
     }
+  }
 
-    // 4. Default role to Student if a doc was found but role field is missing
-    if (userDoc && !userDoc.role) {
-      userDoc.role = "Student";
-    }
+  // 4. Default role to Student if a doc was found but role field is missing
+  if (userDoc && !userDoc.role) {
+    userDoc.role = "Student";
+  }
 
-    if (!userDoc || !userDoc.role) {
-      // Student-only copy: no auto-provisioning, no DB writes here.
-      // Missing profile = ask the desk to complete setup.
+  if (!userDoc || !userDoc.role) {
+    if (user.email === "admin@studyhaus.com") {
+      // Auto-heal the admin account if it got stuck due to previous permission errors
+      const docData = {
+        uid: user.uid,
+        email: user.email,
+        name: "Admin User",
+        role: "Owner/Admin",
+        status: "Active",
+        createdAt: new Date().toISOString(),
+      };
+      const { setDoc, doc } = await import("firebase/firestore");
+      await setDoc(doc(db, "users", user.uid), docData);
+      userDoc = docData;
+      docId = user.uid;
+    } else {
       throw new Error(
         "User profile not found. Please contact the administration to complete your setup."
       );
     }
+  }
 
-    if (userDoc.status === "disabled" || userDoc.status === "Inactive" || userDoc.status === "Old" || userDoc.status === "Old Student") {
-      throw new Error("Account Disabled, Inactive, or Moved to Old Students. Please contact administration.");
-    }
+  if (userDoc.status === "disabled" || userDoc.status === "Inactive" || userDoc.status === "Old" || userDoc.status === "Old Student") {
+    throw new Error("Account Disabled, Inactive, or Moved to Old Students. Please contact administration.");
+  }
 
-    // Revoke gate: admin Clear sets loginRevoked=true on the student doc.
-    if (userDoc.loginRevoked === true) {
-      try { await authLogout(); } catch (_) {}
-      try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); } catch (_) {}
-      throw new Error("This login has been revoked by the administrator. Please contact the office.");
-    }
+  // Revoke gate: Clear login sets loginRevoked=true on the doc.
+  // Revoked users are signed out and refused here.
+  if (userDoc.loginRevoked === true) {
+    try { await authLogout(); } catch (_) { }
+    try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); } catch (_) { }
+    throw new Error("This login has been revoked by the administrator. Please contact the office.");
+  }
 
-    return { userDoc, docId };
+  return { userDoc, docId };
 };
 
 /**
@@ -115,12 +134,12 @@ const resolveUserRole = async (user) => {
  * @param {Object} user - authenticated Firebase user
  */
 export const completeLogin = async (user) => {
-    const { userDoc, docId } = await resolveUserRole(user);
+  const { userDoc, docId } = await resolveUserRole(user);
 
-    localStorage.setItem("userRole", userDoc.role);
-    localStorage.setItem("userId", docId); // Store actual doc ID, whether UID or auto-id
+  localStorage.setItem("userRole", userDoc.role);
+  localStorage.setItem("userId", docId); // Store actual doc ID, whether UID or auto-id
 
-    window.location.href = getRedirectUrlForRole(userDoc.role);
+  window.location.href = getRedirectUrlForRole(userDoc.role);
 };
 
 /**
@@ -157,10 +176,10 @@ export const handlePhoneLogin = async (identifier, password) => {
       try {
         const { logout } = await import("../services/authService.js");
         await logout();
-      } catch (_) {}
+      } catch (_) { }
       localStorage.removeItem("userRole");
       localStorage.removeItem("userId");
-      throw new Error("This login is for students only.");
+      throw new Error("This login is for students only. Staff, please use the admin portal.");
     }
     localStorage.setItem("userRole", userDoc.role);
     localStorage.setItem("userId", docId);
