@@ -1,14 +1,370 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="refresh" content="0; url=/student-login.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-  <title>Studyhaus — Student Portal</title>
+  <title>Student Login — Studyhaus</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #f8fafc;
+      font-family: 'Inter', system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .auth-layout {
+      width: 100%;
+      max-width: 440px;
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .auth-logo {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .auth-logo-flex {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .auth-logo-icon {
+      width: 34px;
+      height: 34px;
+      background: #059669;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+
+    .auth-logo-text {
+      font-weight: 700;
+      font-size: 1.25rem;
+      color: #0f172a;
+    }
+
+    .auth-logo-sub {
+      font-size: 0.85rem;
+      color: #64748b;
+    }
+
+    .auth-card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.02);
+      width: 100%;
+      border: 1px solid #e2e8f0;
+      padding: 2rem;
+    }
+
+    .auth-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #0f172a;
+      margin-bottom: 0.5rem;
+    }
+
+    .auth-desc {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-bottom: 1.5rem;
+      line-height: 1.4;
+    }
+
+    .auth-desc a {
+      color: #059669;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .auth-desc a:hover {
+      text-decoration: underline;
+    }
+
+    .auth-tabs {
+      display: flex;
+      background: #f1f5f9;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 1.5rem;
+    }
+
+    .auth-tab {
+      flex: 1;
+      text-align: center;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #64748b;
+      padding: 8px 12px;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .auth-tab.active {
+      color: #0f172a;
+      background: white;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: #0f172a;
+      margin-bottom: 8px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      background: #f8fafc;
+      font-family: inherit;
+      font-size: 0.9rem;
+      color: #0f172a;
+      outline: none;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .form-group input:focus {
+      border-color: #059669;
+      background: white;
+    }
+
+    .form-group input::placeholder {
+      color: #94a3b8;
+    }
+
+    .pw-wrap {
+      position: relative;
+    }
+
+    .pw-wrap input {
+      padding-right: 38px;
+      font-size: 0.9rem;
+    }
+
+    .pw-eye {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      color: #64748b;
+      padding: 2px;
+    }
+
+    .pw-eye:hover {
+      color: #0f172a;
+    }
+
+    .btn-submit {
+      width: 100%;
+      background: #059669;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-submit:hover {
+      background: #047857;
+    }
+
+    .btn-submit:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    #error-message {
+      color: #ef4444;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      display: none;
+      text-align: center;
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      padding: 8px;
+      border-radius: 6px;
+    }
+
+    #global-loader {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(255, 255, 255, 0.8);
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #059669;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 1rem;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
 </head>
+
 <body>
-  <p>Redirecting to <a href="/student-login.html">Student Login</a>…</p>
-  <script>window.location.replace("/student-login.html");</script>
+  <div id="global-loader">
+    <div class="spinner"></div>
+    <div style="font-weight: 500; color: #0f172a; font-size: 0.9rem;">Authenticating...</div>
+  </div>
+
+  <div class="auth-layout">
+    <div class="auth-logo">
+      <div class="auth-logo-flex">
+        <div class="auth-logo-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 14l9-5-9-5-9 5 9 5z" />
+            <path
+              d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
+            <path
+              d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14zm-4 6v-7.5l4-2.222" />
+          </svg>
+        </div>
+        <div class="auth-logo-text">Studyhaus</div>
+      </div>
+      <div class="auth-logo-sub">Student Portal</div>
+    </div>
+
+    <div class="auth-card">
+      <h1 class="auth-title">Sign in to your account</h1>
+      <p class="auth-desc">Student Portal — sign in with your phone number or email.</p>
+
+      <div class="auth-tabs">
+        <a href="student-login.html" class="auth-tab active">Sign in</a>
+      </div>
+
+      <div id="error-message"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label>Phone Number / Email</label>
+          <input type="text" id="email" required placeholder="9876543210 or student@example.com" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="password" required placeholder="••••••••"
+              autocapitalize="none" autocorrect="off" spellcheck="false" />
+            <button type="button" class="pw-eye" id="pw-eye" title="Show / hide password" aria-label="Show password">👁</button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-submit">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import "./services/translationService.js";
+    import { initAuthGuard } from "./auth/guard.js";
+    import { handlePhoneLogin } from "./auth/login.js?v=login3";
+
+    initAuthGuard();
+
+    const form = document.getElementById("login-form");
+    const errorDiv = document.getElementById("error-message");
+    const loader = document.getElementById("global-loader");
+
+    const pwEye = document.getElementById("pw-eye");
+    if (pwEye) {
+      pwEye.addEventListener("click", () => {
+        const pw = document.getElementById("password");
+        if (!pw) return;
+        const wasHidden = pw.type === "password";
+        pw.type = wasHidden ? "text" : "password";
+        pwEye.textContent = wasHidden ? "🙈" : "👁";
+      });
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorDiv.style.display = "none";
+      loader.style.display = "flex";
+
+      const identifier = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        // Signs in, resolves the role and redirects to the student dashboard.
+        // Any problem (wrong password, missing profile, disabled account)
+        // shows a clear message here instead of failing silently.
+        // Loader stays visible until the redirect happens.
+        await handlePhoneLogin(identifier, password);
+      } catch (error) {
+        loader.style.display = "none";
+        errorDiv.textContent = error.message;
+        errorDiv.style.display = "block";
+      }
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("registered") === "1") {
+      errorDiv.textContent = "Account created successfully! Please sign in.";
+      errorDiv.style.color = "#059669";
+      errorDiv.style.background = "#d1fae5";
+      errorDiv.style.borderColor = "#6ee7b7";
+      errorDiv.style.display = "block";
+    }
+  </script>
 </body>
+
 </html>
