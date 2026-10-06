@@ -33,10 +33,17 @@ export const initAuthGuard = () => {
   if (loader) loader.style.display = "flex";
 
   const currentPath = window.location.pathname;
-  const isPublicPage = currentPath === "/" || currentPath.endsWith("/index.html") || currentPath.endsWith("login.html") || currentPath.endsWith("forgot-password.html") || currentPath.endsWith("register.html") || currentPath.endsWith("unauthorized.html");
+  const normPath = (currentPath.replace(/\/$/, "") || "/").toLowerCase();
+  const isPublicPage = normPath === "/" || normPath === "/index" || normPath.endsWith("/index.html") || normPath === "/login" || normPath.endsWith("login.html") || normPath === "/forgot-password" || normPath.endsWith("forgot-password.html") || normPath === "/register" || normPath.endsWith("register.html") || normPath === "/unauthorized" || normPath.endsWith("unauthorized.html");
+
+  // Wait briefly for Firebase session restore before bouncing protected
+  // pages. First onAuthStateChanged(null) fires while restoring — immediate
+  // redirect causes dashboard refresh double-bounce (dashboard→login→dashboard).
+  let __nullTimer = null;
 
   onAuthStateChanged(async (user) => {
     if (user) {
+      if (__nullTimer) { clearTimeout(__nullTimer); __nullTimer = null; }
       // User is logged in
       try {
         // Fetch role if not in localStorage or to ensure it's up to date
@@ -175,26 +182,31 @@ export const initAuthGuard = () => {
         }
       }
     } else {
-      // User is NOT logged in
-      localStorage.removeItem("userRole");
-      localStorage.removeItem("userId");
-
-      if (localStorage.getItem("forceUnauthorized") === "true") {
-        localStorage.removeItem("forceUnauthorized");
-        window.location.href = "/unauthorized.html";
+      // User is NOT logged in (or session still restoring).
+      if (isPublicPage) {
+        localStorage.removeItem("userRole");
+        localStorage.removeItem("userId");
+        if (loader) loader.style.display = "none";
         return;
       }
+      // Protected page: wait for session restore before bouncing.
+      // If a user arrives within the window, the timer is cancelled above.
+      if (__nullTimer) return;
+      __nullTimer = setTimeout(() => {
+        __nullTimer = null;
+        localStorage.removeItem("userRole");
+        localStorage.removeItem("userId");
 
-      if (!isPublicPage) {
-        // Student-only copy: everything goes to normal login.
-        if (currentPath.startsWith("/student/")) {
-          window.location.href = "/login.html";
-        } else {
-          window.location.href = "/login.html";
+        if (localStorage.getItem("forceUnauthorized") === "true") {
+          localStorage.removeItem("forceUnauthorized");
+          window.location.href = "/unauthorized.html";
+          return;
         }
-      } else {
-        if (loader) loader.style.display = "none";
-      }
+
+        // Student-only copy: everything goes to normal login.
+        window.location.href = "/login.html";
+      }, 1200);
+      return;
     }
   });
 };
