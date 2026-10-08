@@ -461,12 +461,18 @@ export const deleteSeatById = async (seatId) => {
 // NOTE: seat creation from the map UI is handled by addSeatAt (edit-layout
 // mode, cell-anchored). The free-floating addSingleSeat helper is removed.
 
-export const listenToAllSeats = (onUpdate) => {
+export const listenToAllSeats = (onUpdate, onError) => {
   const q = query(collection(db, "seats"), orderBy("seatNumber"));
   return onSnapshot(q, (snapshot) => {
     const seats = [];
     snapshot.forEach(doc => seats.push({ id: doc.id, ...doc.data() }));
     onUpdate(seats);
+  }, (err) => {
+    // Without this, a denied/failed read is indistinguishable from "no seats":
+    // the grid just shows "No seats on this floor yet." Log it loudly and let
+    // the caller surface it instead of failing silently.
+    console.error("[seats] live seat listener failed:", err);
+    if (typeof onError === "function") onError(err);
   });
 };
 

@@ -50,25 +50,38 @@ const compressImage = (file) => {
         return canvas.toDataURL("image/jpeg", q);
       };
 
-      // Try with initial quality, reduce if too large
+      // A Firestore document caps at ~1MB and `studentDocuments` holds FOUR
+      // image fields (aadhaarFront, aadhaarBack, photo, paymentScreenshot).
+      // 220k base64 chars each leaves comfortable headroom for metadata, and
+      // the security rules reject anything over 240k.
       let dataUrl = tryCompress(quality);
       let attempts = 0;
-      const MAX_BYTES = 900000; // Stay safely under Firestore's ~1MB doc limit
-      
-      while (dataUrl.length > MAX_BYTES && attempts < 5) {
+      const MAX_BYTES = 220000;
+      const MIN_QUALITY = 0.2;
+      const MIN_DIM = 320;
+
+      while (dataUrl.length > MAX_BYTES && quality > MIN_QUALITY && attempts < 6) {
         attempts++;
-        quality = Math.max(0.3, quality - 0.1);
+        quality = Math.max(MIN_QUALITY, Math.round((quality - 0.1) * 100) / 100);
         dataUrl = tryCompress(quality);
       }
 
-      // If still too large, reduce dimensions further
-      while (dataUrl.length > MAX_BYTES && (width > 300 || height > 300)) {
-        width = Math.round(width * 0.8);
-        height = Math.round(height * 0.8);
+      // Still too large -> shrink dimensions until it fits (or hit the floor).
+      while (dataUrl.length > MAX_BYTES && (width > MIN_DIM || height > MIN_DIM)) {
+        width = Math.max(1, Math.round(width * 0.8));
+        height = Math.max(1, Math.round(height * 0.8));
         dataUrl = tryCompress(quality);
       }
 
       URL.revokeObjectURL(url);
+
+      if (dataUrl.length > MAX_BYTES) {
+        // Never write an oversized field: it would make the whole document
+        // unwritable and silently break uploads for this student.
+        return reject(new Error(
+          "Image is still too large after compression. Please use a smaller photo (max ~200 KB) and try again."
+        ));
+      }
       resolve(dataUrl);
     };
     img.onerror = reject;

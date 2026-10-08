@@ -2,7 +2,7 @@ import { testFirebaseConnection } from "./firebase/testConnection.js";
 import { initAuthGuard } from "./auth/guard.js";
 import { enforceModulePermissions } from "./auth/middleware.js";
 import { handleLogout } from "./auth/logout.js";
-import { initStudentPortalUI } from "./services/studentPortalUI.js?v=ui2";
+import { initStudentPortalUI } from "./services/studentPortalUI.js";
 import "./services/translationService.js";
 import "./services/whatsappModalUI.js"; // Auto-injects modal styles and functions
 

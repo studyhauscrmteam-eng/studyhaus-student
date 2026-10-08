@@ -1,4 +1,4 @@
-import { getSettings } from "./settingsService.js?v=ui1";
+import { getSettings } from "./settingsService.js";
 
 // Single source of truth for the payment QR shown across the whole portal
 // (admin modals, student admission, pending-payment popup, pay page).

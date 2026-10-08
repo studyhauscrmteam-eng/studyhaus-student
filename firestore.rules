@@ -30,6 +30,63 @@ service cloud.firestore {
     function isOwnDoc() {
       return signedIn() && resource.data.get('studentId', null) == request.auth.uid;
     }
+    // Firestore limits a document to ~1MB. 4 image fields at this cap still fit.
+    function withinImageBudget() {
+      return request.resource.data.get('aadhaarFront', '').size() <= 240000
+        && request.resource.data.get('aadhaarBack', '').size() <= 240000
+        && request.resource.data.get('photo', '').size() <= 240000
+        && request.resource.data.get('paymentScreenshot', '').size() <= 240000;
+    }
+    // On UPDATE only police images this write actually changes, so a legacy
+    // document that predates the cap can still receive non-image edits.
+    // NOTE: rules Sets expose hasOnly/hasAll/hasAny — there is no `has()`.
+    function changedImagesWithinBudget() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let d = request.resource.data;
+      return (!changed.hasAny(['aadhaarFront']) || d.get('aadhaarFront', '').size() <= 240000)
+        && (!changed.hasAny(['aadhaarBack']) || d.get('aadhaarBack', '').size() <= 240000)
+        && (!changed.hasAny(['photo']) || d.get('photo', '').size() <= 240000)
+        && (!changed.hasAny(['paymentScreenshot']) || d.get('paymentScreenshot', '').size() <= 240000);
+    }
+
+    // ---- identity adoption -------------------------------------------------
+    // A person signing up may be matched to a pre-portal `students` record that
+    // has no Auth account yet (uid == ''). They may read it and adopt it rather
+    // than create a duplicate — but ONLY when the record provably belongs to
+    // them: its email equals their Auth email, or its phone forms their Auth
+    // alias ("<10-digit phone>@student.shreejilibrary.com").
+    function identityMatchesUnclaimed(studentId) {
+      let ae = request.auth.token.get('email', '');
+      return signedIn()
+        && ae != ''
+        && resource.data.get('uid', '') == ''
+        && (
+          (resource.data.get('email', '') != '' && resource.data.get('email', '') == ae)
+          || ae == resource.data.get('phone', '') + '@student.shreejilibrary.com'
+        );
+    }
+    // The same test, reached through the student record a document belongs to
+    // (studentDocuments carries no email/phone of its own). Two cases count:
+    //   * still unclaimed and provably mine  -> adoption, pre-claim
+    //   * already claimed by me              -> the retire step that runs in
+    //     the SAME transaction, whichever order Firestore evaluates them in.
+    function ownsLinkedStudent(docId) {
+      let ae = request.auth.token.get('email', '');
+      let sp = /databases/$(database)/documents/students/$(docId);
+      return signedIn()
+        && exists(sp)
+        && (
+          get(sp).data.get('uid', '') == request.auth.uid
+          || (
+            ae != ''
+            && get(sp).data.get('uid', '') == ''
+            && (
+              (get(sp).data.get('email', '') != '' && get(sp).data.get('email', '') == ae)
+              || ae == get(sp).data.get('phone', '') + '@student.shreejilibrary.com'
+            )
+          )
+        );
+    }
 
     // ---------- users ----------
     // Register writes users/{uid} right after Auth creation, so self-create must not
@@ -59,41 +116,102 @@ service cloud.firestore {
       allow write: if isOwner();
     }
 
-    // ---------- students (FIXED: admins could not read at all before) ----------
+    // ---------- students ----------
+    // Canonical record: one doc per person, id = auth uid once a login exists.
+    // A student may CREATE their own doc at signup (full fields, status=Pending),
+    // but afterwards may only edit profile/payment detail — never lifecycle or
+    // credential fields, which are staff-only.
     match /students/{studentId} {
-      allow read: if isStaff() || isSelf(studentId);
-      allow create: if signedIn();
-      allow update: if isStaff() || isSelf(studentId);
+      // isSelf first so a normal member read short-circuits before the
+      // (more expensive) identity test is ever evaluated.
+      allow read: if isStaff() || isSelf(studentId) || identityMatchesUnclaimed(studentId);
+
+      allow create: if (isSelf(studentId) || isStaff())
+        && request.resource.data.get('role', 'Student') == 'Student'
+        && request.resource.data.get('studentDeleted', false) != true;
+
+      allow update: if isStaff()
+        // (a) Adopt / retire an unclaimed record that provably belongs to me.
+        //     The guards below are what stop this being a self-approval path:
+        //     you may not INTRODUCE an approval you did not already hold, and
+        //     you may not quietly rewrite your own login password.
+        || (
+          identityMatchesUnclaimed(studentId)
+          && request.resource.data.get('role', 'Student') == 'Student'
+          && (resource.data.get('approvalStatus', '') == 'Approved'
+              || request.resource.data.get('approvalStatus', '') != 'Approved')
+          && (resource.data.get('status', '') == 'Active'
+              || request.resource.data.get('status', '') != 'Active')
+          && request.resource.data.get('loginPassword', resource.data.get('loginPassword', '')) == resource.data.get('loginPassword', '')
+        )
+        // (b) Normal self-edit: profile + payment detail only. Lifecycle,
+        //     credentials and audit fields stay staff-only. `uid` may only be
+        //     left alone or set to the caller's own uid (never someone else's).
+        || (
+          (isSelf(studentId) || resource.data.get('uid', '') == request.auth.uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasAny([
+             'status', 'approvalStatus', 'authEmail', 'role',
+             'studentId', 'admissionNo', 'loginId', 'loginPassword',
+             'loginCredentials', 'mergedInto', 'needsReview', 'rejectReason',
+             'adminNotes', 'createdAt', 'studentDeleted', 'studentIdSeq'
+           ]) == false
+          && request.resource.data.get('uid', resource.data.get('uid', ''))
+               in [resource.data.get('uid', ''), request.auth.uid]
+          && request.resource.data.get('role', 'Student') == 'Student'
+        );
+
       allow delete: if isManagerUp();
     }
 
-    // ---------- admissions ----------
+    // ---------- admissions (RETIRED as a data store) ----------
+    // New applications live in `students` with approvalStatus == "Pending".
+    // Staff-only write so a stray client can never create a parallel record.
     match /admissions/{admissionId} {
-      allow create: if signedIn();
       allow read: if isStaff();
-      allow update, delete: if isManagerUp();
+      allow create, update, delete: if isStaff();
     }
 
-    // ---------- payments (students can create + read their own requests) ----------
+    // ---------- payments ----------
     match /payments/{paymentId} {
       allow read: if isStaff() || isOwnDoc();
-      allow create: if signedIn() && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid);
+      allow create: if signedIn()
+        && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid)
+        && request.resource.data.get('status', 'pending') in ['pending', 'approved', 'rejected'];
       allow update, delete: if isStaff();
     }
 
-    // ---------- seats (students may flip status during check-in/out + self reserve) ----------
+    // ---------- seats ----------
+    // Doc id = seatNumber (e.g. seats/A17).
+    // Staff can do anything; a student may claim a free seat for themselves or
+    // release/check-out a seat already assigned to them. Nothing else.
+    // Seat holders are written as `null` (not '') by the seeder and importer.
+    // Normalise so a free seat always reads as "unheld" — otherwise a plain
+    // `.get('assignedStudentId', '') in ['', uid]` never matches `null` and
+    // every self-reserve is silently denied.
+    function holderFreeOrMine(h) {
+      return h == null || h == '' || (signedIn() && h == request.auth.uid);
+    }
+
     match /seats/{seatId} {
       allow read: if signedIn();
       allow create, delete: if isStaff();
       allow update: if isStaff() || (
-        signedIn() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'lastUpdated', 'assignedStudentId', 'assignedStudentName', 'planType']) &&
-        request.resource.data.status in ['Available', 'Occupied', 'Reserved'] &&
-        resource.data.status in ['Available', 'Occupied', 'Reserved', 'Maintenance', 'Inactive'] &&
-        (resource.data.get('assignedStudentId', null) == null || resource.data.get('assignedStudentId', null) == request.auth.uid) &&
-        (request.resource.data.get('assignedStudentId', null) == null || request.resource.data.get('assignedStudentId', null) == request.auth.uid) &&
-        request.resource.data.get('seatNumber', resource.data.get('seatNumber', null)) == resource.data.get('seatNumber', null) &&
-        request.resource.data.get('floor', resource.data.get('floor', null)) == resource.data.get('floor', null)
+        signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+             ['status', 'lastUpdated', 'assignedStudentId', 'assignedStudentName', 'planType'])
+        && request.resource.data.get('seatNumber', resource.data.get('seatNumber', '')) == resource.data.get('seatNumber', '')
+        && request.resource.data.get('floor', resource.data.get('floor', '')) == resource.data.get('floor', '')
+        && request.resource.data.get('col', resource.data.get('col', 0)) == resource.data.get('col', 0)
+        && request.resource.data.get('row', resource.data.get('row', 0)) == resource.data.get('row', 0)
+        // Pre: a live seat (never Maintenance / Inactive) that is free, or is
+        // already this student's own reservation.
+        && resource.data.get('status', 'Available') in ['Available', 'Reserved', 'Occupied']
+        && holderFreeOrMine(resource.data.get('assignedStudentId', null))
+        && request.resource.data.status in ['Available', 'Reserved', 'Occupied']
+        // Post: they may only give it to themselves or leave it unheld.
+        && holderFreeOrMine(request.resource.data.get('assignedStudentId', null))
+        && (request.resource.data.status == 'Available'
+            || request.resource.data.get('assignedStudentId', '') == request.auth.uid)
       );
     }
 
@@ -108,15 +226,16 @@ service cloud.firestore {
       allow read: if isStaff() || isOwnDoc();
       allow create: if signedIn() && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid);
       allow update: if isStaff() || (
-        signedIn() &&
-        resource.data.get('studentId', null) == request.auth.uid &&
-        request.resource.data.get('studentId', null) == request.auth.uid &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkOut', 'duration', 'status', 'updatedAt', 'autoClosedReason'])
+        signedIn()
+        && resource.data.get('studentId', null) == request.auth.uid
+        && request.resource.data.get('studentId', null) == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+             ['checkOut', 'duration', 'status', 'updatedAt', 'autoClosedReason'])
       );
       allow delete: if isStaff();
     }
 
-    // ---------- settings (students need read for QR code + display) ----------
+    // ---------- settings ----------
     match /settings/{settingId} {
       allow read: if signedIn();
       allow write: if isManagerUp();
@@ -142,9 +261,28 @@ service cloud.firestore {
     }
 
     match /studentDocuments/{studentId} {
-      allow read: if isStaff() || isSelf(studentId);
-      allow create: if signedIn() && (isSelf(studentId) || isStaff());
-      allow update, delete: if isStaff() || isSelf(studentId);
+      allow read: if isStaff() || isSelf(studentId) || ownsLinkedStudent(studentId);
+      // No size check on create: adoption moves a LEGACY document (compressed
+      // under the older, larger cap) onto the new id inside one transaction,
+      // and rejecting that would abort the whole move. The client caps every
+      // upload at 220k chars, and the update rule below polices real changes.
+      allow create: if isSelf(studentId) || isStaff() || ownsLinkedStudent(studentId);
+      allow update: if (isStaff() || isSelf(studentId) || ownsLinkedStudent(studentId))
+        && changedImagesWithinBudget();
+      allow delete: if isStaff();
+    }
+
+    // ---------- uniqueness claims (written inside transactions) ----------
+    // Guards against double submission / duplicate email / reused txn id.
+    // Clients only ever CREATE a claim — never rewrite one — so nobody can
+    // re-point somebody else's claim. Rewriting stays staff-only (migration).
+    match /uniqueness/{claimId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.get('kind', '')
+             in ['email', 'submission', 'transactionId', 'phone-index']
+        && request.resource.data.get('uid', '') in ['', request.auth.uid];
+      allow update, delete: if isManagerUp();
     }
 
     // ---------- complaints ----------
@@ -175,8 +313,8 @@ service cloud.firestore {
       // Managers+ can edit anything; all staff may only flip the read flag
       // (so opening Notifications clears the bell for everyone).
       allow update: if isManagerUp() || (
-        isStaff() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+        isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
       );
       allow delete: if isManagerUp();
     }
@@ -188,9 +326,23 @@ service cloud.firestore {
       allow update, delete: if isStaff();
     }
 
-    // ---------- MISSING collections (were default-deny = permission-denied) ----------
+    // ---------- visitors: walk-in log + website leads ----------
+    // The public website (anonymous auth) may CREATE a lead, but may never read
+    // the collection or touch anyone else's row.
     match /visitors/{visitorId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff();
+      allow create: if signedIn()
+        && request.resource.data.get('visitorName', '').size() > 0
+        && request.resource.data.get('visitorName', '').size() <= 120
+        && request.resource.data.get('phone', '').size() >= 10
+        && request.resource.data.get('phone', '').size() <= 15
+        && request.resource.data.get('source', 'Walk-in') in ['Website', 'Walk-in']
+        && request.resource.data.get('email', '').size() <= 160
+        && request.resource.data.get('message', '').size() <= 1000
+        && request.resource.data.get('purpose', '').size() <= 80
+        && request.resource.data.get('leadStatus', 'New') in ['New', 'Converted', 'Closed']
+        && request.resource.data.get('status', 'Active') in ['Active', 'Completed'];
+      allow update, delete: if isStaff();
     }
     match /visitorPurposes/{purposeId} {
       allow read: if signedIn();

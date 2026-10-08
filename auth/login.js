@@ -25,36 +25,52 @@ export const getRedirectUrlForRole = () => {
 
 /**
  * Resolve the student's profile WITHOUT redirecting (shared lookup).
- * Student credential only: students/{uid} (admitted) then users/{uid}
- * (pending/new). No credential -> Login not created.
+ *
+ * Order: students/{uid} -> users/{uid} -> self-heal via ensureStudentRecord().
+ * The third step is what permanently removes the old "Login not created"
+ * dead end: every authenticated account is guaranteed exactly one student
+ * record (adopting a pre-portal record when one provably belongs to them).
+ *
  * @returns {Promise<{userDoc, docId}>}
  */
 const resolveUserRole = async (user) => {
     let userDoc = null;
     let docId = user.uid;
 
-    // 1. Admitted students live at students/{uid}.
+    // 1. The canonical record: students/{uid}.
     try {
       userDoc = await retryWithBackoff(() => getDocument("students", user.uid));
     } catch (_) { /* ignore permission errors */ }
 
-    // 2. Pending/new users live at users/{uid} (admin gives credentials).
+    // 2. Fallback for accounts that only have a credential stub.
     if (!userDoc) {
       try {
         userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
-        if (userDoc) docId = user.uid;
       } catch (_) { /* ignore permission errors */ }
     }
 
-    // No credential in either place -> Login not created.
+    // 3. Self-heal — create/adopt the record rather than refusing the login.
+    if (!userDoc) {
+      try {
+        const { ensureStudentRecord } = await import("../services/onboardingService.js");
+        docId = await ensureStudentRecord();
+        userDoc = await retryWithBackoff(() => getDocument("students", docId));
+      } catch (e) {
+        console.error("[login] self-heal failed:", e);
+      }
+    }
+
     if (!userDoc) {
       throw new Error(
-        "Login not created. Please contact the administration to complete your setup."
+        "We could not open your profile. Please try signing in again, or contact the administration."
       );
     }
 
-    if (userDoc.status === "disabled" || userDoc.status === "Inactive" || userDoc.status === "Old" || userDoc.status === "Old Student") {
-      throw new Error("Account Disabled, Inactive, or Moved to Old Students. Please contact administration.");
+    // Account-level lockout ONLY. `Old` / `Inactive` / `Rejected` are
+    // membership states the portal renders deliberately — they must not
+    // block a signed-in member from seeing their own portal.
+    if (userDoc.status === "disabled") {
+      throw new Error("This account has been disabled. Please contact administration.");
     }
 
     // Revoke gate (read-only): admin Clear sets loginRevoked=true.

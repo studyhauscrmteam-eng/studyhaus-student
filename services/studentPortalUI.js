@@ -1,13 +1,15 @@
 import { listenToStudentPortalData, updateStudentOwnProfile } from "./studentPortalService.js";
-import { listenToMyAttendance, checkIn, checkOut } from "./attendanceService.js?v=seat1";
+import { listenToMyAttendance, checkIn, checkOut } from "./attendanceService.js";
 import { calculateStudyHours } from "./studyHourCalculator.js";
 import { generateAttendancePDF } from "./pdfService.js";
 import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
-import { listenToMyComplaints, submitComplaint } from "./complaintService.js?v=ui2";
+import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
-import { getSettings } from "./settingsService.js?v=ui1";
+import { getSettings } from "./settingsService.js";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
+import { STATE, resolvePortalState } from "./onboardingService.js";
+import { renderOnboarding } from "./onboardingUI.js";
 
 let currentStudent = null;
 let currentAttendance = [];
@@ -19,6 +21,11 @@ let unsubscribeAttendance = null;
 let unsubscribePayments = null;
 let unsubscribeComplaints = null;
 let unsubscribeRenewals = null;
+
+/** Plans are fetched once per page load; the wizard needs them to gate seats. */
+let onboardingPlans = [];
+const planForRecord = (s) =>
+  s && s.planId ? onboardingPlans.find((p) => p.id === s.planId) || null : null;
 
 export const initStudentPortalUI = () => {
   const portalSection = document.getElementById("page-student-portal");
@@ -59,6 +66,12 @@ export const initStudentPortalUI = () => {
       set("summary-ends", "Custom");
     }
   };
+
+    // Plans drive the seat-map gate (membershipPlans.seatPreference === true).
+    import("./admissionService.js")
+      .then(({ fetchPlansForDropdown }) => fetchPlansForDropdown(true))
+      .then((p) => { onboardingPlans = p || []; })
+      .catch((e) => console.warn("[portal] plans:", e));
 
   unsubscribePortal = listenToStudentPortalData(async (studentData) => {
     currentStudent = studentData;
@@ -142,7 +155,7 @@ export const initStudentPortalUI = () => {
     // Show modal and initialize seat map
     if (!modal.open) modal.showModal();
     try {
-      const { initSeatMapUI } = await import("./seatMapUI.js?v=ui1");
+      const { initSeatMapUI } = await import("./seatMapUI.js");
       await initSeatMapUI("signup", "checkin-seat-selection-section", { context: "checkin" });
     } catch (e) {
       console.warn("[portal] seat map failed:", e);
@@ -759,424 +772,31 @@ const renderPortal = () => {
   }
 
   // 1. DASHBOARD PAGE (Overview)
-  const hasPendingAdmission = sessionStorage.getItem('pendingName') || sessionStorage.getItem('pendingPlan');
-  if (s._isNewUser || hasPendingAdmission) {
-    // New user or came from website -> Show admission form
-    portalSection.innerHTML = `
-      <div class="page-header" style="margin-bottom: 1.5rem;">
-        <div>
-          <h1>Complete Your Admission</h1>
-          <p class="page-subtitle">Please fill out the admission form to enroll in a plan.</p>
-        </div>
-      </div>
-      <div class="sp-admit-wrap">
-        <div class="card sp-admit-form" style="padding: 2rem; border-radius: 12px; background:var(--bg-card); border:1px solid var(--border);">
-          <form id="admission-form" onsubmit="event.preventDefault(); window.showPaymentModal(); return false;">
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Full name <span style="color:#e53e3e;">*</span></label><input type="text" id="adm-name" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${sessionStorage.getItem('pendingName') || s.name || ''}" /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Mobile <span style="color:#e53e3e;">*</span></label><input type="tel" pattern="[0-9]{10}" id="adm-phone" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${sessionStorage.getItem('pendingPhone') || s.phone || ''}" /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Parent mobile</label><input type="tel" pattern="[0-9]{10}" id="adm-parent-phone" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${s.parentPhone || ''}" /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Email <span style="color:#e53e3e;">*</span></label><input type="email" id="adm-email" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card);" value="${sessionStorage.getItem('pendingEmail') || s.email || ''}" readonly /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Date of birth <span style="color:#e53e3e;">*</span></label><input type="date" id="adm-dob" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${s.dob || ''}" required /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Gender <span style="color:#e53e3e;">*</span></label>
-                <select id="adm-gender" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card);">
-                  <option value="">Select</option><option value="Male" ${s.gender === 'Male' ? 'selected' : ''}>Male</option><option value="Female" ${s.gender === 'Female' ? 'selected' : ''}>Female</option><option value="Other" ${s.gender === 'Other' ? 'selected' : ''}>Other</option>
-                </select>
-              </div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">College / Institute</label><input type="text" id="adm-college" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${s.college || ''}" /></div>
-              <div class="form-group" style="margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Course</label><input type="text" id="adm-course" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" value="${s.course || ''}" /></div>
-              <div class="form-group" style="grid-column: 1 / -1; margin:0;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Remarks / Exam Goal</label><textarea id="adm-remarks" rows="2" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);">${sessionStorage.getItem('pendingMessage') || s.remarks || ''}</textarea></div>
-              <div class="form-group" style="margin:0; grid-column: 1 / -1;"><label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Membership plan <span style="color:#e53e3e;">*</span></label>
-                <select id="adm-plan" required onchange="window.updateSummary()" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card);">
-                  <option value="">Choose plan (Loading...)</option>
-                </select>
-              </div>
-            </div>
-
-            <h3 style="font-size: 15px; margin: 0 0 1rem;">Seat Selection *</h3>
-            <div id="seat-selection-section" style="margin-bottom: 2rem; border: 1px solid var(--border-bright); border-radius: 12px; padding: 1rem;"></div>
-            <input type="hidden" id="selectedSeatNumber" />
-            <input type="hidden" id="selectedSeatId" />
-            
-            <h3 style="font-size: 15px; margin: 0 0 1rem;">Document Uploads *</h3>
-            <div id="doc-upload-section" style="margin-bottom: 1.5rem;"></div>
-
-          </form>
-        </div>
-        <div class="sp-admit-side">
-          <div class="card" style="padding: 1.5rem; background:var(--bg-hover); border:1px solid var(--border); border-radius: 12px; box-shadow: none;">
-            <h4 style="font-size: 11px; font-weight: 700; color:var(--text-muted); letter-spacing: 0.5px; margin-bottom: 1rem;">SUMMARY</h4>
-            <div style="display: flex; justify-content: space-between; font-size: 13px; color:var(--text-secondary); margin-bottom: 12px;"><span>Plan</span><span id="summary-plan" style="color:var(--text-primary); font-weight: 600;">—</span></div>
-            <div style="display: flex; justify-content: space-between; font-size: 13px; color:var(--text-secondary); margin-bottom: 12px;"><span>Amount</span><span id="summary-amount" style="color:var(--text-primary); font-weight: 600;">—</span></div>
-            <div class="sp-divider"></div>
-            <button class="btn btn-primary" id="btn-submit-admission" onclick="document.getElementById('admission-form').requestSubmit()" style="width: 100%; padding: 12px; font-size: 14px;">Confirm Admission</button>
-          </div>
-        </div>
-      </div>
-      
-      <!-- Payment Modal -->
-      <dialog id="payment-modal" class="card" style="border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background: var(--bg-card); color: var(--text-primary); max-width: 450px; margin: auto;">
-        <div style="padding: 1.5rem; border-bottom: 1px solid var(--borderBright); display: flex; justify-content: space-between; align-items: center;">
-          <h2 style="font-size: 1.1rem; font-weight: 600; margin: 0;">Payment Options</h2>
-          <button onclick="window.closePaymentModal()" style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-muted);">&times;</button>
-        </div>
-        
-        <!-- Step 1: Choose Pay Now or Pay Later -->
-        <div id="payment-step-1" style="padding: 1.5rem; text-align: center;">
-          <p style="margin-bottom: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">You can pay now to confirm your seat immediately, or pay later at the desk.</p>
-          <div style="display: flex; gap: 1rem; justify-content: center;">
-            <button class="btn btn-ghost" onclick="window.submitSelfAdmission('Pay Later')" style="flex: 1; border: 1px solid var(--borderBright);">Pay Later</button>
-            <button class="btn btn-primary" onclick="window.showPaymentStep2()" style="flex: 1;">Pay Now</button>
-          </div>
-        </div>
-
-        <!-- Step 2: Pay Now Form -->
-        <div id="payment-step-2" style="padding: 1.5rem; display: none;">
-          <div style="text-align: center; margin-bottom: 1.5rem;">
-            <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 180px; height: 180px; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem;" />
-            <div style="font-weight: 600; color: var(--text-primary);">Scan to Pay: <span id="payment-modal-amount" style="color: var(--primary);">₹--</span></div>
-          </div>
-          <div class="form-group">
-            <label>Transaction ID *</label>
-            <input type="text" id="modal-txnid" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" placeholder="Enter UPI Ref ID" />
-          </div>
-          <div class="form-group" style="margin-bottom: 1.5rem;">
-            <div id="modal-doc-upload-section"></div>
-          </div>
-          <button class="btn btn-primary" id="btn-modal-paid" onclick="window.submitSelfAdmission('Paid')" style="width: 100%;">Mark as Paid & Submit</button>
-        </div>
-      </dialog>
-    `;
-
-    // Hide sidebars since they shouldn't access other pages yet
-    const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
-    navItems.forEach(item => {
-      if (item.getAttribute('data-page') !== 'student-portal') {
-        item.style.display = 'none';
-      }
+  // ---- First-time onboarding / approval gate --------------------------
+  // docs/FLOW-AND-DATA-SPEC.md §3. Every state other than an approved member
+  // renders exactly one wizard step (or its pending/rejected screen) and hides
+  // the navigation. Once the admin approves, this resolves to DASHBOARD and
+  // the wizard never appears again. Nothing is stored in sessionStorage: each
+  // step persists to Firestore before advancing, so a half-finished applicant
+  // resumes at the same step instead of starting over (and never duplicates).
+  const onboardingState = resolvePortalState(s, s._documents || {}, planForRecord(s));
+  if (onboardingState !== STATE.DASHBOARD) {
+    document.querySelectorAll(".sidebar-nav .nav-item").forEach((item) => {
+      item.style.display = "none";
     });
-
-    // We must manually trigger initAdmissionsUI logic for dropdowns since we are in the student portal view
-    import("./admissionService.js").then(({ fetchPlansForDropdown, submitAdmission }) => {
-      window.submitAdmission = submitAdmission;
-      fetchPlansForDropdown(true).then(plans => {
-        window.availablePlansList = plans;
-        const planSelect = document.getElementById("adm-plan");
-        if (planSelect) {
-          let html = "<option value=''>Choose plan</option>";
-          plans.forEach(p => { html += `<option value="${p.id}">${(p.planName || '').toLowerCase()} - ₹${p.price}</option>`; });
-          planSelect.innerHTML = html;
-
-          const savedPlan = sessionStorage.getItem('pendingPlan');
-          if (savedPlan) {
-            // Find a plan where planName includes savedPlan or matches it roughly
-            const matchedPlan = plans.find(p => p.planName.toLowerCase().includes(savedPlan.toLowerCase()) || savedPlan.toLowerCase().includes(p.planName.toLowerCase()));
-            if (matchedPlan) {
-              planSelect.value = matchedPlan.id;
-              window.updateSummary();
-            }
-          }
-        }
-      });
+    renderOnboarding({
+      container: portalSection,
+      state: onboardingState,
+      student: s,
+      documents: s._documents || {},
+      plans: onboardingPlans,
+      plan: planForRecord(s),
+      onAdvance: () => renderPortal()
     });
+    return;
+  }
 
-    import("./seatMapUI.js?v=ui1").then(({ initSeatMapUI }) => {
-      initSeatMapUI("signup", "seat-selection-section");
-    });
-
-    import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-      window.getSelectedDocumentFiles = getSelectedDocumentFiles;
-      window.uploadAdmissionDocuments = uploadAdmissionDocuments;
-      initDocumentUploads("doc-upload-section");
-    });
-
-    // Add logic for modal flow
-    window.showPaymentModal = async () => {
-      const selectedSeatId = document.getElementById("selectedSeatId")?.value;
-      if (!selectedSeatId && !s.seatNumber) {
-        return window.showToast(window.t ? window.t('Please select a seat from the Seat Map.') || "Please select a seat from the Seat Map." : "Please select a seat from the Seat Map.", "error");
-      }
-
-      // Document uploads are now optional
-
-      const btnSubmit = document.getElementById("btn-submit-admission");
-      const originalText = btnSubmit.innerHTML;
-      btnSubmit.innerHTML = "Reserving Seat...";
-      btnSubmit.disabled = true;
-
-      try {
-        if (selectedSeatId) {
-          const { assignSeat } = await import("./seatService.js");
-          const studentName = document.getElementById("adm-name").value || "New Student";
-          await assignSeat(selectedSeatId, { id: s.id, name: studentName });
-        }
-      } catch (e) {
-        btnSubmit.innerHTML = originalText;
-        btnSubmit.disabled = false;
-        return window.showToast(window.t ? window.t('Failed to reserve seat: ') || "Failed to reserve seat: " : "Failed to reserve seat: " + e.message, "error");
-      }
-
-      btnSubmit.innerHTML = originalText;
-      btnSubmit.disabled = false;
-
-      const modal = document.getElementById("payment-modal");
-      document.getElementById("payment-step-1").style.display = "block";
-      document.getElementById("payment-step-2").style.display = "none";
-
-      const amount = document.getElementById("summary-amount").innerText;
-      document.getElementById("payment-modal-amount").innerText = amount;
-
-      modal.showModal();
-    };
-
-    window.closePaymentModal = async () => {
-      const modal = document.getElementById("payment-modal");
-      modal.close();
-      const selectedSeatId = document.getElementById("selectedSeatId")?.value;
-      if (selectedSeatId) {
-        try {
-          const { unassignSeat } = await import("./seatService.js");
-          await unassignSeat(selectedSeatId);
-          window.showToast(window.t ? window.t('Seat reservation released.') || "Seat reservation released." : "Seat reservation released.", "info");
-        } catch (e) {
-          console.error("Failed to release seat on cancel", e);
-        }
-      }
-    };
-
-    window.showPaymentStep2 = () => {
-      document.getElementById("payment-step-1").style.display = "none";
-      document.getElementById("payment-step-2").style.display = "block";
-    };
-
-    window.submitSelfAdmission = async (paymentMethod) => {
-      let txnId = "";
-
-      try {
-        if (paymentMethod === "Paid") {
-          txnId = document.getElementById("modal-txnid").value;
-          if (!txnId) return window.showToast(window.t ? window.t('Please enter Transaction ID.') || "Please enter Transaction ID." : "Please enter Transaction ID.", "warning");
-
-          const btn = document.getElementById("btn-modal-paid");
-          btn.innerHTML = "Uploading & Submitting...";
-          btn.disabled = true;
-        } else {
-          const btn = document.querySelector("#payment-step-1 button.btn-ghost");
-          btn.innerHTML = "Submitting...";
-          btn.disabled = true;
-        }
-
-        // Upload Admission Documents first if present (single photo + ID proofs)
-        let docUrls = {};
-        if (window.getSelectedDocumentFiles && window.uploadAdmissionDocuments) {
-          const files = window.getSelectedDocumentFiles();
-          if (files.aadhaarFront || files.aadhaarBack || files.photo) {
-            docUrls = await window.uploadAdmissionDocuments(files, s.id);
-          }
-        }
-
-        // Collect form data
-        const planEl = document.getElementById("adm-plan");
-        const planId = planEl.value;
-        const plan = (window.availablePlansList || []).find(p => p.id === planId);
-
-        const selectedSeatNumber = document.getElementById("selectedSeatNumber")?.value || "";
-        const selectedSeatId = document.getElementById("selectedSeatId")?.value || "";
-
-        const data = {
-          name: document.getElementById("adm-name").value,
-          phone: document.getElementById("adm-phone").value,
-          email: (document.getElementById("adm-email")?.value || "").trim().toLowerCase(),
-          dob: document.getElementById("adm-dob")?.value || "",
-          gender: document.getElementById("adm-gender")?.value || "",
-          parentPhone: document.getElementById("adm-parent-phone")?.value || "",
-          college: document.getElementById("adm-college")?.value || "",
-          course: document.getElementById("adm-course")?.value || "",
-          address: document.getElementById("adm-address")?.value || "",
-          planId: planId,
-          planName: plan ? plan.planName : "",
-          seatNumber: selectedSeatNumber,
-          seatId: selectedSeatId,
-          paymentMethod: paymentMethod,
-          transactionId: txnId,
-          paymentScreenshotUrl: "",
-          documents: docUrls,
-          loginCredentials: s.loginCredentials || "",
-          termsAccepted: true
-        };
-
-        if (paymentMethod === "Pay Later") {
-          const d = new Date();
-          d.setDate(d.getDate() + 3);
-          data.paymentDueDate = d.toISOString().split('T')[0];
-        }
-
-        if (window.submitAdmission) {
-          // Note: window.submitAdmission takes (data, isSelfAdmission) as arguments
-          // wait, let me check admissionService.js
-          const res = await window.submitAdmission(data, true);
-          if (res.success) {
-            // Upgrade seat status to Occupied
-            if (selectedSeatId) {
-              try {
-                const { changeSeatStatus } = await import("./seatService.js");
-                await changeSeatStatus(selectedSeatId, "Occupied");
-              } catch (e) {
-                console.error("Failed to mark seat as occupied", e);
-              }
-            }
-            // Website requests ALWAYS stay Pending until an admin approves —
-            // even when paid now. The admin decides in Pending approval.
-            if (paymentMethod === "Paid") {
-              window.showToast(window.t ? window.t('Payment received! Your request is now Pending Approval — the admin will confirm your admission.') || "Payment received! Your request is now Pending Approval — the admin will confirm your admission." : "Payment received! Your request is now Pending Approval — the admin will confirm your admission.", "success");
-            } else {
-              window.showToast(window.t ? window.t('Admission request submitted successfully and is Pending Approval!') || "Admission request submitted successfully and is Pending Approval!" : "Admission request submitted successfully and is Pending Approval!", "success");
-            }
-            document.getElementById("payment-modal").close();
-            sessionStorage.removeItem('pendingName');
-            sessionStorage.removeItem('pendingPhone');
-            sessionStorage.removeItem('pendingEmail');
-            sessionStorage.removeItem('pendingPlan');
-            sessionStorage.removeItem('pendingMessage');
-            window.location.reload(); // reload to show pending or active state
-          } else {
-            window.showToast((window.t ? window.t('Error: ') : "Error: ") + res.error, "error");
-            document.getElementById("payment-modal").close();
-            if (paymentMethod === "Paid") {
-              const btn = document.getElementById("btn-modal-paid");
-              btn.innerHTML = "Mark as Paid & Submit";
-              btn.disabled = false;
-            } else {
-              const btn = document.querySelector("#payment-step-1 button.btn-ghost");
-              btn.innerHTML = "Pay Later";
-              btn.disabled = false;
-            }
-          }
-        }
-      } catch (err) {
-        window.showToast((window.t ? window.t('An unexpected error occurred: ') : "An unexpected error occurred: ") + err.message, "error");
-        if (paymentMethod === "Paid") {
-          const btn = document.getElementById("btn-modal-paid");
-          if (btn) { btn.innerHTML = "Mark as Paid & Submit"; btn.disabled = false; }
-        } else {
-          const btn = document.querySelector("#payment-step-1 button.btn-ghost");
-          if (btn) { btn.innerHTML = "Pay Later"; btn.disabled = false; }
-        }
-      }
-    };
-
-  } else if (s._isPendingAdmission) {
-    // Pending admission state
-    portalSection.innerHTML = `
-      <div class="page-header" style="margin-bottom: 1.5rem; justify-content: center; text-align: center;">
-        <div>
-          <h1 style="color: var(--warning);">Admission Pending Approval</h1>
-          <p class="page-subtitle" style="margin-top: 0.5rem;">Your admission details have been submitted and are waiting for admin approval. Please check back later or contact the desk.</p>
-        </div>
-      </div>
-      <div style="display: flex; justify-content: center;">
-        <div class="card" style="padding: 2rem; max-width: 500px; text-align: center; border-radius: 12px; background:var(--bg-card); border:1px solid var(--border);">
-           <div style="font-size: 3rem; margin-bottom: 1rem;">⏳</div>
-           <h3 style="margin-bottom: 1rem; color:var(--text-primary);">What's next?</h3>
-           <ul style="text-align: left; color:var(--text-secondary); font-size: 0.95rem; line-height: 1.5; padding-left: 1.5rem;">
-             <li>The admin will verify your details and payment.</li>
-             <li>Once approved, you will get access to the portal.</li>
-             <li>If you chose "Pay Later", please visit the desk, or pay online below.</li>
-           </ul>
-           <button class="btn btn-primary" style="margin-top: 1rem; width: 100%;" onclick="window.showPendingPaymentModal()">Pay Now Online</button>
-        </div>
-      </div>
-
-      <!-- Payment Modal for Pending State -->
-      <dialog id="pending-payment-modal" class="card" style="border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background: var(--bg-card); color: var(--text-primary); max-width: 450px; margin: auto;">
-        <div style="padding: 1.5rem; border-bottom: 1px solid var(--borderBright); display: flex; justify-content: space-between; align-items: center;">
-          <h2 style="font-size: 1.1rem; font-weight: 600; margin: 0;">Pay Now</h2>
-          <button onclick="document.getElementById('pending-payment-modal').close()" style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-muted);">&times;</button>
-        </div>
-        
-        <!-- Step 2: Pay Now Form (Directly) -->
-        <div id="pending-payment-step-2" style="padding: 1.5rem;">
-          <div style="text-align: center; margin-bottom: 1.5rem;">
-            <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 180px; height: 180px; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem;" />
-            <div style="font-weight: 600; color: var(--text-primary);">Scan to Pay</div>
-          </div>
-          <div class="form-group">
-            <label>Transaction ID *</label>
-            <input type="text" id="pending-modal-txnid" required style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);" placeholder="Enter UPI Ref ID" />
-          </div>
-          <div class="form-group" style="margin-bottom: 1.5rem;">
-            <div id="pending-modal-doc-upload-section"></div>
-          </div>
-          <button class="btn btn-primary" id="btn-pending-modal-paid" onclick="window.submitPendingPayment()" style="width: 100%;">Mark as Paid & Submit</button>
-        </div>
-      </dialog>
-    `;
-
-    window.showPendingPaymentModal = () => {
-      document.getElementById('pending-payment-modal').showModal();
-      import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-        window.getSelectedDocumentFiles = getSelectedDocumentFiles;
-        window.uploadAdmissionDocuments = uploadAdmissionDocuments;
-        initDocumentUploads("pending-modal-doc-upload-section");
-        setTimeout(() => {
-          const d1 = document.getElementById('doc-card-aadhaarFront');
-          const d2 = document.getElementById('doc-card-aadhaarBack');
-          const d3 = document.getElementById('doc-card-photo');
-          if (d1) d1.style.display = 'none';
-          if (d2) d2.style.display = 'none';
-          if (d3) {
-            d3.style.gridColumn = "1 / -1";
-            const lbl = d3.querySelector('div[style*="font-size:12px"]');
-            if (lbl) lbl.textContent = "Payment Screenshot (Optional)";
-            const icon = d3.querySelector('div[style*="font-size:1.5rem"], div[style*="justify-content:center"]');
-            if (icon) icon.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><line x1="8" x2="16" y1="8" y2="8"/><line x1="8" x2="16" y1="12" y2="12"/><line x1="8" x2="13" y1="16" y2="16"/></svg>';
-          }
-        }, 100);
-      });
-    };
-
-    window.submitPendingPayment = async () => {
-      const txnId = document.getElementById("pending-modal-txnid").value;
-      if (!txnId) return window.showToast(window.t ? window.t('Please enter Transaction ID.') || "Please enter Transaction ID." : "Please enter Transaction ID.", "warning");
-
-      const btn = document.getElementById("btn-pending-modal-paid");
-      btn.innerHTML = "Uploading & Submitting...";
-      btn.disabled = true;
-
-      let paymentScreenshotUrl = "";
-      if (window.getSelectedDocumentFiles && window.uploadAdmissionDocuments) {
-        const files = window.getSelectedDocumentFiles();
-        // Store as `paymentScreenshot` (NOT the student photo) so paying
-        // never overwrites the student's single photo.
-        if (files.photo) {
-          const urlMap = await window.uploadAdmissionDocuments({ paymentScreenshot: files.photo }, s.id);
-          paymentScreenshotUrl = urlMap.paymentScreenshotUrl || "";
-        }
-      }
-
-      import("./admissionService.js").then(async ({ updateAdmissionPayment }) => {
-        const res = await updateAdmissionPayment(s.id, txnId, paymentScreenshotUrl);
-        if (res.success) {
-          window.showToast(window.t ? window.t('Payment details updated successfully!') || "Payment details updated successfully!" : "Payment details updated successfully!", "success");
-          document.getElementById("pending-payment-modal").close();
-          window.location.reload();
-        } else {
-          window.showToast((window.t ? window.t('Error: ') : "Error: ") + res.error, "error");
-          btn.innerHTML = "Mark as Paid & Submit";
-          btn.disabled = false;
-        }
-      });
-    };
-
-    // Hide sidebars since they shouldn't access other pages yet
-    const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
-    navItems.forEach(item => {
-      if (item.getAttribute('data-page') !== 'student-portal') {
-        item.style.display = 'none';
-      }
-    });
-
-  } else {
+  { // ----- active student dashboard -----
     // Normal active student dashboard
 
     // Clean up Settings page for students (Hide admin-only controls)

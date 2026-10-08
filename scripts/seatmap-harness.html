@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Seat map render harness</title>
+<!-- Bare specifier is unresolvable in a plain browser; map it to the stub. -->
+<script type="importmap">
+{ "imports": { "firebase/firestore": "/scripts/stubs/firestore.js" } }
+</script>
+<style>
+  :root {
+    --border-bright: #334155; --bg-hover: #1e293b; --bg-card: #111827;
+    --text-primary: #e5e7eb; --text-secondary: #94a3b8; --text-muted: #64748b;
+    --primary: #2563eb; --border: #1f2937; --bg: #0f1115;
+  }
+  body { background: var(--bg); color: var(--text-primary); margin: 0;
+         padding: 16px; font-family: system-ui, -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+  <!-- Mirrors onboardingUI.js:141-144 — the exact DOM the wizard presents. -->
+  <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:1rem;min-height:220px;"></div>
+  <p id="onb-seat-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>
+  <!-- Mirrors onboardingUI.js:142-143 -->
+  <input type="hidden" id="selectedSeatNumber" />
+  <input type="hidden" id="selectedSeatId" />
+  <div id="signup-selected-label" style="margin-top:.6rem;font-size:13px;"></div>
+
+<script type="module">
+  const out = { ready: false, error: null };
+  window.__harness = out;
+  try {
+    const m = await import("/services/seatMapUI.js");
+    await m.initSeatMapUI("signup", "onb-seat");
+    out.ready = true;
+  } catch (e) {
+    out.error = e && e.message ? e.message : String(e);
+    console.error("harness failed:", e);
+  }
+</script>
+</body>
+</html>

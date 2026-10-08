@@ -1,4 +1,4 @@
-import { listenToAllSeats, assignSeat, unassignSeat, changeSeatStatus, seedInitialSeats, reconcileSeatOccupancy, cleanupNonPlanSeats, saveSeatPosition, renameSeat, addSeatAt, deleteSeatById } from "./seatService.js?v=play3";
+import { listenToAllSeats, assignSeat, unassignSeat, changeSeatStatus, seedInitialSeats, reconcileSeatOccupancy, cleanupNonPlanSeats, saveSeatPosition, renameSeat, addSeatAt, deleteSeatById } from "./seatService.js";
 import { getDocs, collection, query, where } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 
@@ -344,10 +344,29 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     // Listen for live seat updates — unsubscribe the previous picker's
     // listener first (this init runs on every Check-In modal open).
     if (signupSeatsUnsub) { try { signupSeatsUnsub(); } catch (_) {} }
+    // A failed read must never masquerade as "no seats here" — that exact
+    // silent failure is what made the map look broken. Say what went wrong.
+    const surfaceSeatError = (err) => {
+      const reason = (err && (err.message || err.code)) || "permission denied";
+      const grid = document.getElementById("signup-seat-grid");
+      if (grid) {
+        grid.style.display = "block";
+        grid.innerHTML =
+          '<div style="text-align:center;padding:1.75rem 1rem;color:#ef4444;font-size:13px;line-height:1.5;">' +
+          "Seat map could not load:<br><strong>" + reason + "</strong><br>" +
+          '<span style="color:var(--text-muted);">Reload the page. If it keeps happening, tell staff the seats are not readable.</span>' +
+          "</div>";
+      }
+      ["onb-seat-status"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = "Seat map failed to load: " + reason;
+      });
+      console.error("[seats] seat map could not load:", err);
+    };
     signupSeatsUnsub = listenToAllSeats((records) => {
       signupAllSeats = records;
       renderSignupSeats();
-    });
+    }, surfaceSeatError);
 
     // Re-paint seat colors when night/day theme toggles
     if (window.__seatThemeObserver) window.__seatThemeObserver.disconnect();

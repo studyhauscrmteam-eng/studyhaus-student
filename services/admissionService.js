@@ -1,8 +1,8 @@
 import { collection, addDoc, serverTimestamp, getDocs, query, where, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { validateStudentData } from "./studentValidation.js";
-import { approveAdmission, rejectAdmission } from "./approvalService.js?v=login3";
-import { createPortalAccount } from "./authService.js?v=login5";
+import { approveAdmission, rejectAdmission } from "./approvalService.js";
+import { createPortalAccount } from "./authService.js";
 import { ensureStudentId } from "./studentIdService.js";
 import { getAuth } from "firebase/auth";
 
@@ -129,7 +129,7 @@ export const submitAdmission = async (formData, isStudent) => {
         notifyNewAdmission({ id: admissionId, ...formData }).catch(() => {});
         const { sendAdmissionReceivedMail, sendAdminNewAdmissionMail } = await import("./emailService.js");
         sendAdmissionReceivedMail({ id: admissionId, ...formData }).catch(() => {});
-        const { getSettings } = await import("./settingsService.js?v=ui1");
+        const { getSettings } = await import("./settingsService.js");
         getSettings().then((settings) => {
           if (settings && settings.adminEmail) {
             sendAdminNewAdmissionMail(settings.adminEmail, { id: admissionId, ...formData }).catch(() => {});

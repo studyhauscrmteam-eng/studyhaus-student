@@ -248,6 +248,66 @@
         transform: rotate(360deg);
       }
     }
+
+    /* Sign in / Sign up switcher */
+    .auth-tabs {
+      display: flex;
+      gap: 4px;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 1.25rem;
+    }
+
+    .auth-tab {
+      flex: 1;
+      padding: 9px 12px;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #64748b;
+      background: transparent;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background .15s, color .15s, box-shadow .15s;
+    }
+
+    .auth-tab:hover {
+      color: #0f172a;
+    }
+
+    .auth-tab.active {
+      background: #ffffff;
+      color: #059669;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .1);
+    }
+
+    .auth-hint {
+      font-size: 12.5px;
+      color: #64748b;
+      line-height: 1.55;
+      margin-top: .875rem;
+    }
+
+    .auth-hint a {
+      color: #059669;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .auth-hint a:hover {
+      text-decoration: underline;
+    }
+
+    .pw-req {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 6px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 
@@ -275,8 +335,13 @@
     </div>
 
     <div class="auth-card">
-      <h1 class="auth-title">Sign in to your account</h1>
-      <p class="auth-desc">Student Portal — sign in with your phone number or email.</p>
+      <div class="auth-tabs" role="tablist">
+        <button type="button" class="auth-tab active" id="tab-signin" role="tab" aria-selected="true">Sign in</button>
+        <button type="button" class="auth-tab" id="tab-signup" role="tab" aria-selected="false">Create account</button>
+      </div>
+
+      <h1 class="auth-title" id="auth-title">Sign in to your account</h1>
+      <p class="auth-desc" id="auth-desc">Student Portal — sign in with your phone number or email.</p>
 
       <div id="error-message"></div>
 
@@ -295,6 +360,50 @@
         </div>
 
         <button type="submit" class="btn-submit">Sign in</button>
+
+        <p class="auth-hint">
+          First time here? <a id="link-signup">Create your account →</a>
+        </p>
+      </form>
+
+      <!-- ── Sign up ─────────────────────────────────────────────────── -->
+      <form id="signup-form" style="display:none;">
+        <div class="form-group">
+          <label>Full name</label>
+          <input type="text" id="su-name" required placeholder="Your full name" autocomplete="name" />
+        </div>
+
+        <div class="form-group">
+          <label>Mobile number or Email</label>
+          <input type="text" id="su-identifier" required
+            placeholder="9876543210 or student@example.com"
+            autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+          <div class="pw-req">This becomes your login ID — use your mobile number, or your email.</div>
+        </div>
+
+        <div class="form-group">
+          <label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="su-password" required minlength="6"
+              placeholder="At least 6 characters" autocomplete="new-password" />
+            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password">👁</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Confirm password</label>
+          <input type="password" id="su-confirm" required minlength="6"
+            placeholder="Repeat your password" autocomplete="new-password" />
+        </div>
+
+        <button type="submit" class="btn-submit" id="btn-signup">Create account</button>
+
+        <p class="auth-hint">
+          Already registered? <a id="link-signin">Sign in instead →</a><br />
+          Your account will be created immediately — after that a short 5-step
+          form collects your details, documents, plan, seat and payment. The
+          admin approves it and your dashboard opens.
+        </p>
       </form>
     </div>
   </div>
@@ -312,7 +421,7 @@
   <script type="module">
     import "./services/translationService.js";
     import { initAuthGuard } from "./auth/guard.js";
-    import { handlePhoneLogin } from "./auth/login.js?v=login3";
+    import { handlePhoneLogin } from "./auth/login.js";
 
     initAuthGuard();
 
@@ -349,6 +458,83 @@
         loader.style.display = "none";
         errorDiv.textContent = error.message;
         errorDiv.style.display = "block";
+      }
+    });
+
+    const $id = (id) => document.getElementById(id);
+
+    const showError = (msg) => {
+      errorDiv.textContent = msg;
+      errorDiv.style.color = "#e53e3e";
+      errorDiv.style.background = "#fee2e2";
+      errorDiv.style.borderColor = "#fecaca";
+      errorDiv.style.display = "block";
+    };
+
+    /* ── Sign in / Sign up switcher ─────────────────────────────────── */
+    const showTab = (which) => {
+      const isUp = which === "signup";
+      $id("signup-form").style.display = isUp ? "block" : "none";
+      $id("login-form").style.display = isUp ? "none" : "block";
+      $id("tab-signup").classList.toggle("active", isUp);
+      $id("tab-signin").classList.toggle("active", !isUp);
+      $id("tab-signup").setAttribute("aria-selected", String(isUp));
+      $id("tab-signin").setAttribute("aria-selected", String(!isUp));
+      $id("auth-title").textContent = isUp ? "Create your account" : "Sign in to your account";
+      $id("auth-desc").textContent = isUp
+        ? "Your login ID is your mobile number or email."
+        : "Student Portal — sign in with your phone number or email.";
+      errorDiv.style.display = "none";
+    };
+    $id("tab-signin").addEventListener("click", () => showTab("signin"));
+    $id("tab-signup").addEventListener("click", () => showTab("signup"));
+    $id("link-signup").addEventListener("click", () => showTab("signup"));
+    $id("link-signin").addEventListener("click", () => showTab("signin"));
+
+    const suEye = $id("su-eye");
+    if (suEye) {
+      suEye.addEventListener("click", () => {
+        const pw = $id("su-password");
+        const wasHidden = pw.type === "password";
+        pw.type = wasHidden ? "text" : "password";
+        suEye.textContent = wasHidden ? "🙈" : "👁";
+      });
+    }
+
+    /* ── Sign up ────────────────────────────────────────────────────── */
+    $id("signup-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorDiv.style.display = "none";
+
+      const name = $id("su-name").value.trim();
+      const identifier = $id("su-identifier").value.trim();
+      const password = $id("su-password").value;
+      const confirm = $id("su-confirm").value;
+
+      if (!name) return showError("Please enter your full name.");
+      if (password.length < 6) return showError("Password must be at least 6 characters.");
+      if (password !== confirm) return showError("Passwords do not match.");
+
+      const btn = $id("btn-signup");
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Creating account…";
+      loader.style.display = "flex";
+
+      try {
+        // Creates the Auth account first, then writes users/{uid} and
+        // students/{uid} in ONE transaction — adopting an existing record
+        // instead of creating a duplicate. See onboardingService.js.
+        const { completeSignup } = await import("./services/onboardingService.js");
+        const res = await completeSignup({ identifier, password, name });
+        localStorage.setItem("userRole", "Student");
+        localStorage.setItem("userId", res.uid);
+        window.location.href = "/student/dashboard.html";
+      } catch (err) {
+        loader.style.display = "none";
+        btn.disabled = false;
+        btn.textContent = label;
+        showError(err.message || "Could not create the account.");
       }
     });
 

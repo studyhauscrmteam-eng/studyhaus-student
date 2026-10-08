@@ -1,7 +1,7 @@
 import { onAuthStateChanged, logout } from "../services/authService.js";
 import { getDocument } from "../services/firestoreService.js";
-import { getRedirectUrlForRole } from "./login.js?v=login2";
-import { protectRoute } from "./middleware.js?v=mid2";
+import { getRedirectUrlForRole } from "./login.js";
+import { protectRoute } from "./middleware.js";
 
 /**
  * Retry a Firestore read with exponential backoff.
