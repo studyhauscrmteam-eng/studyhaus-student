@@ -161,11 +161,12 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
             onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable})"
             title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
             style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
-                   border-radius:8px; height:46px; display:flex; align-items:center;
-                   justify-content:center; cursor:${cursor}; transition:box-shadow 0.15s, border-color 0.15s;
-                   font-size:13px; font-weight:600; width: 100%;"
-            onmouseover="if(${isPickable}) { this.style.boxShadow='0 0 0 2px currentColor'; }"
-            onmouseout="this.style.boxShadow='none';"
+                   border-radius:10px; height:52px; display:flex; align-items:center;
+                   justify-content:center; cursor:${cursor}; transition:transform .12s, box-shadow .15s, border-color .15s;
+                   font-size:13.5px; font-weight:700; letter-spacing:.02em; width: 100%;
+                   box-shadow:0 1px 2px rgba(0,0,0,.07);"
+            onmouseover="if(${isPickable}) { this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 14px rgba(0,0,0,.18)'; }"
+            onmouseout="this.style.transform='none'; this.style.boxShadow='0 1px 2px rgba(0,0,0,.07)';"
           >
             ${isSelected ? "✓ " : ""}${seat.seatNumber}
           </div>
@@ -221,11 +222,12 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
               onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable})"
               title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
               style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
-                     border-radius:8px; height:46px; display:flex; align-items:center;
-                     justify-content:center; cursor:${cursor}; transition:box-shadow 0.15s, border-color 0.15s;
-                     font-size:13px; font-weight:600;"
-              onmouseover="if(${isPickable}) { this.style.boxShadow='0 0 0 2px currentColor'; }"
-              onmouseout="this.style.boxShadow='none';"
+                     border-radius:10px; height:52px; display:flex; align-items:center;
+                     justify-content:center; cursor:${cursor}; transition:transform .12s, box-shadow .15s, border-color .15s;
+                     font-size:13.5px; font-weight:700; letter-spacing:.02em;
+                     box-shadow:0 1px 2px rgba(0,0,0,.07);"
+              onmouseover="if(${isPickable}) { this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 14px rgba(0,0,0,.18)'; }"
+              onmouseout="this.style.transform='none'; this.style.boxShadow='0 1px 2px rgba(0,0,0,.07)';"
             >
               ${isSelected ? "✓ " : ""}${seat.seatNumber}
             </div>

@@ -41,14 +41,18 @@ const input = (id, type, value, attrs = "") =>
   `<input type="${type}" id="${id}" value="${esc(value)}" style="${FLD}" ${attrs} />`;
 
 /** Progress rail shared by every wizard step. */
+/** Which wizard steps are already complete — shared by the in-card rail and
+ *  the sidebar rail so the two can never disagree. */
+const stepDoneMap = (state, student, documents, plan) => ({
+  DETAILS: detailsComplete(student),
+  DOCUMENTS: docsComplete(documents || {}),
+  PLAN: !!student.planId,
+  SEAT: planRequiresSeat(plan) ? !!student.seatNumber : true,
+  PAYMENT: paymentComplete(student)
+});
+
 const progressHtml = (state, student, documents, plan) => {
-  const done = {
-    DETAILS: detailsComplete(student),
-    DOCUMENTS: docsComplete(documents || {}),
-    PLAN: !!student.planId,
-    SEAT: planRequiresSeat(plan) ? !!student.seatNumber : true,
-    PAYMENT: paymentComplete(student)
-  };
+  const done = stepDoneMap(state, student, documents, plan);
   const active = WIZARD_STEPS.findIndex((s) => s.key === state);
 
   return `
@@ -76,10 +80,51 @@ const progressHtml = (state, student, documents, plan) => {
 };
 
 const shell = (state, student, documents, plan, body, footer) => `
+  <div id="onb-wizard">
+  <style>
+    /* Wizard controls, themed to the portal palette. Raw browser selects were
+       the "bogus" dropdowns: flat, unstyled and visually unrelated to the
+       rest of the app. */
+    #onb-wizard select,
+    #onb-wizard input,
+    #onb-wizard textarea {
+      font-family: inherit;
+      font-size: 14px;
+      transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+    }
+    #onb-wizard select {
+      appearance: none;
+      -webkit-appearance: none;
+      padding-right: 2.4rem;
+      cursor: pointer;
+      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right .8rem center;
+      background-size: 15px 15px;
+    }
+    #onb-wizard select:hover,
+    #onb-wizard input:hover,
+    #onb-wizard textarea:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+    #onb-wizard select:focus,
+    #onb-wizard input:focus,
+    #onb-wizard textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+    }
+    #onb-wizard select:invalid { color: var(--text-muted); }
+    #onb-wizard option { background: var(--bg-card); color: var(--text-primary); padding: 8px; }
+    #onb-wizard option:checked { background: var(--primary); color: #fff; }
+    #onb-wizard .form-group label { color: var(--text-primary); }
+    #onb-wizard textarea { resize: vertical; line-height: 1.5; }
+    @media (max-width: 760px) {
+      #onb-wizard .form-group { grid-column: 1 / -1 !important; }
+    }
+  </style>
   <div class="page-header" style="margin-bottom:1.25rem;">
     <div>
       <h1>Complete Your Admission</h1>
-      <p class="page-subtitle">Step ${Math.max(1, WIZARD_STEPS.findIndex((s) => s.key === state) + 1)} of ${WIZARD_STEPS.length} — your progress is saved automatically.</p>
+      <p class="page-subtitle">Step ${Math.max(1, WIZARD_STEPS.findIndex((s) => s.key === state) + 1)} of ${WIZARD_STEPS.length} — every field is required and your progress is saved automatically.</p>
     </div>
   </div>
   <div class="card" style="padding:1.75rem;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);">
@@ -88,6 +133,7 @@ const shell = (state, student, documents, plan, body, footer) => `
     <div style="display:flex;gap:.75rem;margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border);">
       ${footer}
     </div>
+  </div>
   </div>`;
 
 /* --------------------------------------------------------------- step bodies */
@@ -96,8 +142,8 @@ const detailsBody = (s) => `
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
     ${field("onb-name", "Full name", input("onb-name", "text", s.name || "", 'required placeholder="Your full name"'), true)}
     ${field("onb-phone", "Mobile", input("onb-phone", "tel", s.phone || "", 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
-    ${field("onb-parent-phone", "Parent mobile", input("onb-parent-phone", "tel", s.parentPhone || "", 'pattern="[0-9]{10}" maxlength="10"'), false)}
-    ${field("onb-email", "Email", input("onb-email", "email", s.email || "", 'placeholder="you@example.com"'), false)}
+    ${field("onb-parent-phone", "Parent mobile", input("onb-parent-phone", "tel", s.parentPhone || "", 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
+    ${field("onb-email", "Email", input("onb-email", "email", s.email || "", 'required placeholder="you@example.com"'), true)}
     ${field("onb-dob", "Date of birth", input("onb-dob", "date", s.dob || "", "required"), true)}
     ${field("onb-gender", "Gender", `
       <select id="onb-gender" required style="${FLD}">
@@ -107,7 +153,7 @@ const detailsBody = (s) => `
     ${field("onb-college", "College / Institute", input("onb-college", "text", s.college || "", 'required placeholder="Your college"'), true)}
     ${field("onb-course", "Course", input("onb-course", "text", s.course || "", 'required placeholder="e.g. B.Com, NEET"'), true)}
     ${field("onb-address", "Address", `<textarea id="onb-address" rows="2" required style="${FLD}" placeholder="Residential address">${esc(s.address || "")}</textarea>`, true, false)}
-    ${field("onb-remarks", "Remarks / Exam goal", `<textarea id="onb-remarks" rows="2" style="${FLD}" placeholder="Optional — what are you preparing for?">${esc(s.remarks || "")}</textarea>`, false, false)}
+    ${field("onb-remarks", "Remarks / Exam goal", `<textarea id="onb-remarks" rows="2" required style="${FLD}" placeholder="What are you preparing for?">${esc(s.remarks || "")}</textarea>`, true, false)}
   </div>`;
 
 const documentsBody = (s) => `
@@ -133,12 +179,28 @@ const planBody = (s, plans) => `
       </div>`, false)}
   </div>`;
 
+/** Colour key for the seat picker — without it the grid is a wall of squares. */
+const seatLegend = () => `
+  <div style="display:flex;flex-wrap:wrap;gap:.9rem;align-items:center;margin:0 0 .9rem;padding:.6rem .85rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-hover);">
+    ${[
+      ["Available", "#22c55e"],
+      ["Your pick", "var(--primary)"],
+      ["Occupied", "#ef4444"],
+      ["Reserved", "#f59e0b"],
+      ["Unavailable", "#94a3b8"]
+    ].map(([label, color]) => `
+      <span style="display:inline-flex;align-items:center;gap:.4rem;font-size:11.5px;font-weight:600;color:var(--text-muted);">
+        <span style="width:12px;height:12px;border-radius:4px;background:${color};box-shadow:0 0 0 1px rgba(0,0,0,.14);"></span>${label}
+      </span>`).join("")}
+  </div>`;
+
 const seatBody = () => `
   <h3 style="font-size:15px;margin:0 0 .35rem;">Pick your seat</h3>
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 1rem;">
     Only seats marked <strong>Available</strong> can be chosen. Your seat is reserved for you the moment you select it.
   </p>
-  <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:1rem;min-height:220px;"></div>
+  ${seatLegend()}
+  <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:1rem;min-height:220px;background:var(--bg-hover);"></div>
   <input type="hidden" id="selectedSeatNumber" />
   <input type="hidden" id="selectedSeatId" />
   <p id="onb-seat-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>`;
@@ -224,6 +286,94 @@ const signupBody = () => `
  * @param {{state:string, student:Object, documents?:Object, plan?:Object,
  *          plans?:Object[], onAdvance:Function}} opts
  */
+let savedNavHtml = null;
+
+/**
+ * Themed placeholder painted SYNCHRONOUSLY — before `renderOnboarding` awaits
+ * anything. The finished dashboard used to sit on screen while plans loaded
+ * and then swap to the wizard; this removes that flash entirely.
+ */
+export const showWizardLoading = (container) => {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="page-header" style="margin-bottom:1.25rem;">
+      <div>
+        <h1>Complete Your Admission</h1>
+        <p class="page-subtitle">Opening your admission wizard…</p>
+      </div>
+    </div>
+    <div class="card" style="padding:1.75rem;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);">
+      <div class="onb-skel" style="height:30px;width:64%;border-radius:999px;background:var(--bg-hover);margin-bottom:1.5rem;"></div>
+      ${[0, 1, 2, 3].map(() => `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
+          <div class="onb-skel" style="height:46px;border-radius:8px;background:var(--bg-hover);"></div>
+          <div class="onb-skel" style="height:46px;border-radius:8px;background:var(--bg-hover);"></div>
+        </div>`).join("")}
+      <div class="onb-skel" style="height:44px;width:190px;border-radius:8px;background:var(--primary);opacity:.4;margin-top:1.5rem;"></div>
+    </div>
+    <style>
+      @keyframes onbShimmer { 0% { opacity:.5 } 50% { opacity:1 } 100% { opacity:.5 } }
+      .onb-skel { animation: onbShimmer 1.15s ease-in-out infinite; }
+    </style>`;
+};
+
+/**
+ * Swap the navigation for an admission step rail while the wizard is on
+ * screen. Hiding every nav item left a blank sidebar slab — this keeps the
+ * column purposeful and shows the student exactly where they are.
+ */
+export const paintWizardSidebar = (state, student, documents, plan) => {
+  const nav = document.querySelector(".sidebar-nav");
+  if (!nav) return;
+  if (savedNavHtml === null) savedNavHtml = nav.innerHTML;
+
+  const done = stepDoneMap(state, student, documents, plan);
+  const active = WIZARD_STEPS.findIndex((s) => s.key === state);
+  const pct = Math.round(
+    (WIZARD_STEPS.filter((s) => done[s.key]).length / WIZARD_STEPS.length) * 100
+  );
+
+  nav.innerHTML = `
+    <div style="padding:.35rem .85rem .7rem;font-size:10.5px;font-weight:800;letter-spacing:.1em;color:var(--text-muted);">ADMISSION</div>
+    ${WIZARD_STEPS.map((step, i) => {
+      const isDone = !!done[step.key];
+      const isActive = i === active;
+      const ring = isActive ? "var(--primary)" : isDone ? "rgba(16,185,129,.55)" : "var(--border)";
+      const chip = isActive ? "#fff" : isDone ? "var(--success,#10b981)" : "var(--text-muted)";
+      const bg = isActive ? "var(--primary)" : isDone ? "rgba(16,185,129,.15)" : "var(--bg-hover)";
+      return `
+        <div class="nav-item" style="display:flex;gap:.65rem;align-items:center;padding:.6rem .85rem;margin:.15rem .5rem;border-radius:9px;
+              background:${isActive ? "var(--bg-hover)" : "transparent"};opacity:${isActive || isDone ? 1 : .72};">
+          <div style="width:26px;height:26px;flex:0 0 26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+                      font-size:12px;font-weight:800;color:${chip};background:${bg};border:2px solid ${ring};">
+            ${isDone ? "✓" : i + 1}
+          </div>
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:${isActive ? 700 : 600};color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${step.label}</div>
+            ${isActive ? `<div style="font-size:10.5px;color:var(--text-muted);">Current step</div>` : ""}
+          </div>
+        </div>`;
+    }).join("")}
+    <div style="margin:.65rem .85rem 0;padding:.7rem .75rem;border-radius:10px;background:var(--bg-hover);border:1px solid var(--border);">
+      <div style="height:5px;border-radius:999px;background:var(--border);overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:var(--primary);border-radius:999px;transition:width .3s;"></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-muted);margin-top:.45rem;">${pct}% complete · saved automatically</div>
+    </div>
+    <div style="margin:.5rem .85rem 0;padding:.7rem .75rem;border-radius:10px;background:var(--bg-hover);font-size:11.5px;color:var(--text-muted);line-height:1.45;">
+      Every step saves before you move on — close the tab and you will resume right here.
+    </div>`;
+};
+
+/** Put the real navigation back once the student reaches the dashboard. */
+export const restoreSidebar = () => {
+  const nav = document.querySelector(".sidebar-nav");
+  if (nav && savedNavHtml !== null) {
+    nav.innerHTML = savedNavHtml;
+    savedNavHtml = null;
+  }
+};
+
 export const renderOnboarding = async (opts) => {
   const { container, state, student, onAdvance } = opts;
   if (!container) return;
@@ -428,12 +578,22 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       if (!course) return toast("Please enter your course.", "warning");
       if (!address) return toast("Please enter your address.", "warning");
 
+      // Every field on this step is mandatory — nothing is optional.
+      const parentPhone = val("onb-parent-phone").replace(/\D/g, "");
+      const email = val("onb-email").trim().toLowerCase();
+      const remarks = val("onb-remarks").trim();
+
+      if (parentPhone.length !== 10) return toast("Please enter a valid 10-digit parent mobile number.", "warning");
+      if (!email) return toast("Please enter your email address.", "warning");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Please enter a valid email address.", "warning");
+      if (!remarks) return toast("Please enter your remarks / exam goal.", "warning");
+
       setBusy(true, "Saving…");
       const res = await saveDetails(id, {
         name, phone, dob, gender, college, course, address,
-        parentPhone: val("onb-parent-phone").replace(/\D/g, ""),
-        email: val("onb-email").toLowerCase(),
-        remarks: val("onb-remarks")
+        parentPhone,
+        email,
+        remarks
       });
       setBusy(false);
       if (!res.success) return toast("Could not save: " + res.error, "error");

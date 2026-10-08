@@ -9,7 +9,7 @@ import { getSettings } from "./settingsService.js";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { STATE, resolvePortalState } from "./onboardingService.js";
-import { renderOnboarding } from "./onboardingUI.js";
+import { renderOnboarding, showWizardLoading, paintWizardSidebar, restoreSidebar } from "./onboardingUI.js";
 
 let currentStudent = null;
 let currentAttendance = [];
@@ -781,9 +781,12 @@ const renderPortal = () => {
   // resumes at the same step instead of starting over (and never duplicates).
   const onboardingState = resolvePortalState(s, s._documents || {}, planForRecord(s));
   if (onboardingState !== STATE.DASHBOARD) {
-    document.querySelectorAll(".sidebar-nav .nav-item").forEach((item) => {
-      item.style.display = "none";
-    });
+    // Both of these run BEFORE renderOnboarding awaits the plan list: the
+    // sidebar becomes an admission step rail (hiding the nav items used to
+    // leave a blank slab) and the content area gets a themed skeleton. That is
+    // what stops the finished dashboard flashing for a beat first.
+    paintWizardSidebar(onboardingState, s, s._documents || {}, planForRecord(s));
+    showWizardLoading(portalSection);
     renderOnboarding({
       container: portalSection,
       state: onboardingState,
@@ -795,6 +798,8 @@ const renderPortal = () => {
     });
     return;
   }
+  // Approved: put the real navigation back (it was swapped for the step rail).
+  restoreSidebar();
 
   { // ----- active student dashboard -----
     // Normal active student dashboard
