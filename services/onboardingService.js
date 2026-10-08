@@ -238,6 +238,21 @@ export const completeSignup = async ({ identifier, password, name }) => {
     const studentsRef = doc(db, "students", studentDocId);
     const usersRef = doc(db, "users", uid);
 
+    // ALL READS FIRST. Firestore rejects any tx.get() issued after a tx.set(),
+    // and reading here (instead of below) is what unblocks account creation:
+    // the old docs snapshot never depends on the writes above it.
+    const oldDocsRef = existing ? doc(db, "studentDocuments", existing.id) : null;
+    const oldDocsSnap = oldDocsRef ? await tx.get(oldDocsRef) : null;
+
+    // Same for the uniqueness claims: EVERY read in this transaction has to be
+    // issued before the first tx.set(), or Firestore aborts the whole thing.
+    // A client may only CREATE a claim (never rewrite one), so we must know
+    // what already exists before a single write happens.
+    const emailClaimRef = email ? doc(db, "uniqueness", "email_" + email) : null;
+    const emailClaimSnap = emailClaimRef ? await tx.get(emailClaimRef) : null;
+    const phoneClaimRef = phone ? doc(db, "uniqueness", "phone_" + phone) : null;
+    const phoneClaimSnap = phoneClaimRef ? await tx.get(phoneClaimRef) : null;
+
     const base = {
       uid,
       authEmail,
@@ -285,9 +300,8 @@ export const completeSignup = async ({ identifier, password, name }) => {
         }, { merge: true });
 
         // Move identity documents too so Aadhaar/selfie follow the person.
-        const oldDocsRef = doc(db, "studentDocuments", existing.id);
-        const oldDocsSnap = await tx.get(oldDocsRef);
-        if (oldDocsSnap.exists()) {
+        // oldDocsSnap was already read at the top of this transaction.
+        if (oldDocsSnap && oldDocsSnap.exists()) {
           tx.set(doc(db, "studentDocuments", studentDocId), oldDocsSnap.data(), { merge: true });
           tx.set(oldDocsRef, { studentId: "", migratedTo: "studentDocuments/" + studentDocId }, { merge: true });
         }
@@ -328,33 +342,27 @@ export const completeSignup = async ({ identifier, password, name }) => {
     // staff to rewrite claims but a student to create them, so re-`set`-ing an
     // existing claim would abort the whole transaction. An existing claim
     // already points at the right record — that is all we need it for.
-    if (email) {
-      const emailClaimRef = doc(db, "uniqueness", "email_" + email);
-      const emailClaimSnap = await tx.get(emailClaimRef);
-      if (!emailClaimSnap.exists()) {
-        tx.set(emailClaimRef, {
-          kind: "email",
-          uid,
-          ownerPath: "students/" + studentDocId,
-          createdAt: serverTimestamp()
-        });
-      }
+    // Claims were read at the very top; only the CREATE happens down here,
+    // after every other write in this transaction.
+    if (emailClaimRef && !emailClaimSnap.exists()) {
+      tx.set(emailClaimRef, {
+        kind: "email",
+        uid,
+        ownerPath: "students/" + studentDocId,
+        createdAt: serverTimestamp()
+      });
     }
-    if (phone) {
-      const phoneRef = doc(db, "uniqueness", "phone_" + phone);
-      const phoneSnap = await tx.get(phoneRef);
-      if (!phoneSnap.exists()) {
-        tx.set(phoneRef, {
-          kind: "phone-index",
-          owners: ["students/" + studentDocId],
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      }
-      // An existing entry is migration output and is only ever READ — appending
-      // to it would be a forbidden update. It stays valid regardless: entries
-      // pointing at a record that now carries a uid are simply not adoptable.
+    if (phoneClaimRef && !phoneClaimSnap.exists()) {
+      tx.set(phoneClaimRef, {
+        kind: "phone-index",
+        owners: ["students/" + studentDocId],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
     }
+    // An existing claim is migration output and is only ever READ — appending
+    // to it would be a forbidden update. It stays valid regardless: entries
+    // pointing at a record that now carries a uid are simply not adoptable.
 
     return !!existing;
   });
@@ -389,6 +397,12 @@ export const ensureStudentRecord = async () => {
     // Same move as in completeSignup — one transaction, never a duplicate.
     await runTransaction(db, async (tx) => {
       const target = doc(db, "students", uid);
+
+      // ALL READS FIRST - Firestore forbids a read after a write in the same
+      // transaction, which is what used to kill this adoption (and with it,
+      // account creation).
+      const oldDocsRef = doc(db, "studentDocuments", adopt.id);
+      const oldDocsSnap = await tx.get(oldDocsRef);
       const moved = { ...adopt.data, uid, authEmail, role: "Student", updatedAt: serverTimestamp() };
       delete moved.mergedInto;
       // Keep an approved member approved; otherwise re-open for the wizard.
@@ -406,8 +420,6 @@ export const ensureStudentRecord = async () => {
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      const oldDocsRef = doc(db, "studentDocuments", adopt.id);
-      const oldDocsSnap = await tx.get(oldDocsRef);
       if (oldDocsSnap.exists()) {
         tx.set(doc(db, "studentDocuments", uid), oldDocsSnap.data(), { merge: true });
         tx.set(oldDocsRef, { studentId: "", migratedTo: "studentDocuments/" + uid }, { merge: true });
@@ -579,6 +591,16 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
       if (!snap.exists()) throw new Error("Your record could not be found. Please refresh.");
       const current = snap.data();
 
+      // READ FIRST: the transaction-ID claim must be read before tx.update()
+      // below, because Firestore allows no read at all once a write has been
+      // issued in the same transaction.
+      const key = String(transactionId || "").trim().toLowerCase();
+      const claimRef =
+        paymentMethod === "Paid" && transactionId && key !== "rc-imp"
+          ? doc(db, "uniqueness", "txn_" + key)
+          : null;
+      const claimSnap = claimRef ? await tx.get(claimRef) : null;
+
       if (current.approvalStatus === "Approved") {
         throw new Error("This application has already been approved.");
       }
@@ -596,24 +618,19 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
 
       tx.update(studentRef, payload);
 
-      if (paymentMethod === "Paid" && transactionId) {
-        const key = String(transactionId).trim().toLowerCase();
-        if (key !== "rc-imp") {
-          const claimRef = doc(db, "uniqueness", "txn_" + key);
-          const claimSnap = await tx.get(claimRef);
-          if (claimSnap.exists()) {
-            const owner = claimSnap.data().ownerPath || "";
-            const mine = owner === "students/" + studentId || owner === uid;
-            if (!mine) throw new Error("That transaction ID has already been used.");
-            // Already ours — claims are create-only for clients, so there is
-            // nothing to rewrite; re-asserting an existing claim would be denied.
-          } else {
-            tx.set(claimRef, {
-              kind: "transactionId",
-              ownerPath: "students/" + studentId,
-              createdAt: now
-            });
-          }
+      if (claimRef) {
+        if (claimSnap.exists()) {
+          const owner = claimSnap.data().ownerPath || "";
+          const mine = owner === "students/" + studentId || owner === uid;
+          if (!mine) throw new Error("That transaction ID has already been used.");
+          // Already ours — claims are create-only for clients, so there is
+          // nothing to rewrite; re-asserting an existing claim would be denied.
+        } else {
+          tx.set(claimRef, {
+            kind: "transactionId",
+            ownerPath: "students/" + studentId,
+            createdAt: now
+          });
         }
       }
     });
