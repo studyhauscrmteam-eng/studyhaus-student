@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { checkRotationalCapacity } from "./planValidation.js";
 
@@ -32,14 +32,22 @@ export const validateStudentData = async (data) => {
     }
   }
 
-  // Duplicate checks in both 'students' and 'admissions'.
-  // Admin submissions AND website/student submissions both get checked so the
-  // same phone number or email can never exist twice. For student
-  // self-submissions the student's own pending record (same uid) is excluded.
-  // NOTE: students can only read their own doc per Firestore rules, so if the
-  // check fails on permissions for a student submission we let it through —
-  // the admin-side approval step re-checks with staff permissions and blocks
-  // any duplicate from ever reaching the main students list.
+  // Duplicate checks.
+  //
+  // 1) FIRST: the "one request per phone/email" claim. This is the ONE place
+  //    a student is always allowed to read, so unlike the collection query in
+  //    step 2 it can never be skipped. Before this existed, a student
+  //    submission hit permission-denied on `students`, the error was swallowed
+  //    below, and the same number could send request after request.
+  const normEmail = data.email ? String(data.email).trim().toLowerCase() : "";
+  await checkRequestNotAlreadyFiled(data.phone, normEmail);
+
+  // 2) Then the full collection scan. Admin submissions AND website/student
+  //    submissions both get checked so the same phone number or email can
+  //    never exist twice. For student self-submissions the student's own
+  //    pending record (same uid) is excluded. Students may only read their own
+  //    doc per Firestore rules, so a permission failure here is tolerated —
+  //    step 1 and the admin-side approval re-check still hold the line.
   const isStudent = !!data.isStudentSubmission;
   try {
     await checkDuplicates(data.phone, data.email, isStudent ? data.uid || data._selfUid || null : null);
@@ -49,6 +57,38 @@ export const validateStudentData = async (data) => {
     } else {
       throw e;
     }
+  }
+  return true;
+};
+
+/** Read a uniqueness claim; unreadable (permission) counts as "not filed". */
+const readClaim = async (id) => {
+  try {
+    const snap = await getDoc(doc(db, "uniqueness", id));
+    return snap.exists() ? (snap.data() || {}) : null;
+  } catch (e) {
+    if (/permission|denied|insufficient/i.test(e?.message || "")) return null;
+    throw e;
+  }
+};
+
+/**
+ * Friendly block: the same number / email may only send ONE request.
+ * Throws the message the applicant should see.
+ */
+export const checkRequestNotAlreadyFiled = async (phone, email) => {
+  const normEmail = email ? String(email).trim().toLowerCase() : "";
+  if (phone) {
+    if (await readClaim(`req_adm_${phone}`)) {
+      throw new Error(
+        `We already have a request from ${phone} — no second one can be filed. We'll call you.`
+      );
+    }
+  }
+  if (normEmail && await readClaim(`req_admmail_${normEmail}`)) {
+    throw new Error(
+      `We already have a request from ${normEmail} — no second one can be filed. We'll call you.`
+    );
   }
   return true;
 };

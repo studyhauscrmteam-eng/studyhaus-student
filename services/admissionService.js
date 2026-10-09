@@ -1,4 +1,4 @@
-import { collection, addDoc, serverTimestamp, getDocs, query, where, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
+import { collection, addDoc, serverTimestamp, getDocs, query, where, onSnapshot, doc, updateDoc, setDoc, runTransaction } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { validateStudentData } from "./studentValidation.js";
 import { approveAdmission, rejectAdmission } from "./approvalService.js";
@@ -57,6 +57,39 @@ export const updateAdmissionPayment = async (admissionId, transactionId, payment
  * ADMIN submissions (isStudent = false) go straight to 'students' as Active
  * and get a sequential admission number (SH-0001, SH-0002, …).
  */
+/**
+ * Write the record AND the "one request per phone/email" claim in ONE
+ * transaction — both land or neither does. ALL reads come before the first
+ * write (Firestore rejects tx.get() after tx.set()). A second request for the
+ * same number throws here, before anything is created, with the friendly
+ * message the applicant sees. New prefixes (`req_adm_` / `req_admmail_`) keep
+ * this clear of the portal's own `phone_` / `email_` index claims.
+ *
+ * @returns {Promise<string>} the record id
+ */
+const createRequestWithClaim = async (ref, payload) => {
+  const phone = String(payload.phone || "").trim();
+  const email = String(payload.email || "").trim().toLowerCase();
+  const phoneClaimRef = phone ? doc(db, "uniqueness", `req_adm_${phone}`) : null;
+  const emailClaimRef = email ? doc(db, "uniqueness", `req_admmail_${email}`) : null;
+
+  await runTransaction(db, async (tx) => {
+    const pc = phoneClaimRef ? await tx.get(phoneClaimRef) : null;
+    const ec = emailClaimRef ? await tx.get(emailClaimRef) : null;
+    // `exists` is a METHOD on the web SDK's DocumentSnapshot.
+    if ((pc && pc.exists()) || (ec && ec.exists())) {
+      throw new Error(
+        `We already have a request from ${phone || email} — no second one can be filed. We'll call you.`
+      );
+    }
+    tx.set(ref, payload, { merge: true });
+    const stamp = { docPath: ref.path, uid: "", createdAt: serverTimestamp() };
+    if (phoneClaimRef) tx.set(phoneClaimRef, { kind: "phone-index", ...stamp });
+    if (emailClaimRef) tx.set(emailClaimRef, { kind: "email", ...stamp });
+  });
+  return ref.id;
+};
+
 export const submitAdmission = async (formData, isStudent) => {
   try {
     formData.isStudentSubmission = isStudent;
@@ -114,12 +147,11 @@ export const submitAdmission = async (formData, isStudent) => {
       formData.approvalStatus = "Pending";
       formData.status = "Pending";
       let admissionId = uid;
-      if (admissionId) {
-        await setDoc(doc(db, "admissions", admissionId), formData, { merge: true });
-      } else {
-        // Pure website form (no account at all) — auto-ID record.
-        const ref = await addDoc(collection(db, "admissions"), formData);
-        admissionId = ref.id;
+      {
+        const ref = admissionId
+          ? doc(db, "admissions", admissionId)
+          : doc(collection(db, "admissions"));
+        admissionId = await createRequestWithClaim(ref, formData);
       }
 
       // Notify the admin (in-app + email). Failures here must never block
@@ -162,14 +194,10 @@ export const submitAdmission = async (formData, isStudent) => {
         formData.authEmail = account.authEmail;
       }
 
-      let studentId;
-      if (uid) {
-        await setDoc(doc(db, "students", uid), formData);
-        studentId = uid;
-      } else {
-        const studentRef = await addDoc(collection(db, "students"), formData);
-        studentId = studentRef.id;
-      }
+      const studentId = await createRequestWithClaim(
+        uid ? doc(db, "students", uid) : doc(collection(db, "students")),
+        formData
+      );
       return { success: true, studentId, accountCreated: !!uid };
     }
     
