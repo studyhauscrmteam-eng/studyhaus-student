@@ -500,20 +500,19 @@ export const renderOnboarding = async (opts) => {
 
   if (state === STATE.PAYMENT) {
     import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-      initDocumentUploads("onb-shot-docs");
+      // ONE card with its OWN label. This step used to render the Photo card
+      // and patch the visible text afterwards, which left "Upload or take
+      // selfie" and a big [Take Selfie] button under the payment heading —
+      // the mislabel the owner reported.
+      initDocumentUploads("onb-shot-docs", {
+        keys: ["paymentScreenshot"],
+        title: "Payment screenshot",
+        note: "(required when paying now)"
+      });
       window.__onbGetFiles = getSelectedDocumentFiles;
       window.__onbUploadFiles = uploadAdmissionDocuments;
-      // The payment step only needs the screenshot.
-      ["aadhaarFront", "aadhaarBack"].forEach((k) => {
-        const c = document.getElementById("doc-card-" + k);
-        if (c) c.style.display = "none";
-      });
-      const photoCard = document.getElementById("doc-card-photo");
-      if (photoCard) {
-        photoCard.style.gridColumn = "1 / -1";
-        const lbl = photoCard.querySelector("div[style*='font-size:12px']");
-        if (lbl) lbl.textContent = "Payment screenshot *";
-      }
+      const shotCard = document.getElementById("doc-card-paymentScreenshot");
+      if (shotCard) shotCard.style.gridColumn = "1 / -1";
       if (student.paymentScreenshotUrl) {
         const st = document.getElementById("onb-pay-status");
         if (st) st.textContent = "A payment screenshot is already attached.";
@@ -584,6 +583,10 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       const remarks = val("onb-remarks").trim();
 
       if (parentPhone.length !== 10) return toast("Please enter a valid 10-digit parent mobile number.", "warning");
+      // The parent number is the contact we use when the student can't be
+      // reached — it has to reach somebody else (owner: "block same parent
+      // and student number").
+      if (parentPhone === phone) return toast("Parent's mobile number must be different from your own number.", "warning");
       if (!email) return toast("Please enter your email address.", "warning");
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Please enter a valid email address.", "warning");
       if (!remarks) return toast("Please enter your remarks / exam goal.", "warning");
@@ -683,12 +686,12 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       try {
         if (paid) {
           const files = (window.__onbGetFiles && window.__onbGetFiles()) || {};
-          if (!files.photo && !student.paymentScreenshotUrl) {
+          if (!files.paymentScreenshot && !student.paymentScreenshotUrl) {
             setBusy(false);
             return toast("Please attach a screenshot of your payment.", "warning");
           }
-          if (files.photo && window.__onbUploadFiles) {
-            const map = await window.__onbUploadFiles({ paymentScreenshot: files.photo }, id);
+          if (files.paymentScreenshot && window.__onbUploadFiles) {
+            const map = await window.__onbUploadFiles({ paymentScreenshot: files.paymentScreenshot }, id);
             shot = map.paymentScreenshotUrl || "";
           }
         }

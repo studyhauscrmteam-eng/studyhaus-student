@@ -9,6 +9,22 @@ import { checkRotationalCapacity } from "./planValidation.js";
 export const validateStudentData = async (data) => {
   if (!data.name || data.name.trim() === "") throw new Error("Full Name is required.");
   if (!data.phone || data.phone.trim() === "") throw new Error("Phone Number is required.");
+
+  // Owner rule: the parent's mobile may NEVER be the student's own number —
+  // it is the fallback contact we use when the student cannot be reached, so
+  // it has to reach somebody else. Digits only, 10 like every other number.
+  const digits = (v) => String(v || "").replace(/\D/g, "");
+  const ownPhone = digits(data.phone);
+  const parentPhone = digits(data.parentPhone);
+  if (parentPhone) {
+    if (parentPhone.length !== 10) {
+      throw new Error("Parent's mobile number must be exactly 10 digits.");
+    }
+    if (parentPhone === ownPhone) {
+      throw new Error("Parent's mobile number cannot be the same as the student's own number.");
+    }
+  }
+
   if (!data.dob) throw new Error("Date of Birth is required.");
   if (!data.gender) throw new Error("Gender is required.");
   if (!data.planId) throw new Error("Membership Plan is required.");

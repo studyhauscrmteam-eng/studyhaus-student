@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-  <title>Student Login — Studyhaus</title>
+  <title>Create Account — Studyhaus</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
@@ -335,30 +335,51 @@
     </div>
 
     <div class="auth-card">
-      <!-- Login ONLY. Account creation lives on its own page: /register.html -->
-      <h1 class="auth-title" id="auth-title">Sign in to your account</h1>
-      <p class="auth-desc" id="auth-desc">Student Portal — sign in with your phone number or email.</p>
+      <!-- Deliberately NO tab strip and NO link back to Sign in: the website
+           hands a visitor straight here, and this page only ever creates an
+           account. Existing members sign in at /login.html. -->
+      <h1 class="auth-title" id="auth-title">Create your account</h1>
+      <p class="auth-desc" id="auth-desc">Your login ID is your mobile number or email — then a short
+        5-step form collects your details, documents, plan, seat and payment.</p>
 
       <div id="error-message"></div>
 
-      <form id="login-form">
+      <!-- ── Create account ──────────────────────────────────────────── -->
+      <form id="signup-form">
         <div class="form-group">
-          <label>Phone Number / Email</label>
-          <input type="text" id="email" required placeholder="9876543210 or student@example.com" />
+          <label>Full name</label>
+          <input type="text" id="su-name" required placeholder="Your full name" autocomplete="name" />
         </div>
+
+        <div class="form-group">
+          <label>Mobile number or Email</label>
+          <input type="text" id="su-identifier" required
+            placeholder="9876543210 or student@example.com"
+            autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+          <div class="pw-req">This becomes your login ID — use your mobile number, or your email.</div>
+        </div>
+
         <div class="form-group">
           <label>Password</label>
           <div class="pw-wrap">
-            <input type="password" id="password" required placeholder="••••••••"
-              autocapitalize="none" autocorrect="off" spellcheck="false" />
-            <button type="button" class="pw-eye" id="pw-eye" title="Show / hide password" aria-label="Show password">👁</button>
+            <input type="password" id="su-password" required minlength="6"
+              placeholder="At least 6 characters" autocomplete="new-password" />
+            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password">👁</button>
           </div>
         </div>
 
-        <button type="submit" class="btn-submit">Sign in</button>
+        <div class="form-group">
+          <label>Confirm password</label>
+          <input type="password" id="su-confirm" required minlength="6"
+            placeholder="Repeat your password" autocomplete="new-password" />
+        </div>
+
+        <button type="submit" class="btn-submit" id="btn-signup">Create account</button>
 
         <p class="auth-hint">
-          First time here? <a href="/register.html">Create your account →</a>
+          Your account is created immediately. After that a short 5-step form
+          collects your details, documents, plan, seat and payment. The admin
+          approves it and your dashboard opens.
         </p>
       </form>
     </div>
@@ -377,46 +398,13 @@
   <script type="module">
     import "./services/translationService.js";
     import { initAuthGuard } from "./auth/guard.js";
-    import { handlePhoneLogin } from "./auth/login.js";
 
+    // register.html is a PUBLIC page: an already-signed-in visitor is bounced
+    // to their dashboard, an anonymous one stays here and creates an account.
     initAuthGuard();
 
-    const form = document.getElementById("login-form");
     const errorDiv = document.getElementById("error-message");
     const loader = document.getElementById("global-loader");
-
-    const pwEye = document.getElementById("pw-eye");
-    if (pwEye) {
-      pwEye.addEventListener("click", () => {
-        const pw = document.getElementById("password");
-        if (!pw) return;
-        const wasHidden = pw.type === "password";
-        pw.type = wasHidden ? "text" : "password";
-        pwEye.textContent = wasHidden ? "🙈" : "👁";
-      });
-    }
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      errorDiv.style.display = "none";
-      loader.style.display = "flex";
-
-      const identifier = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
-
-      try {
-        // Signs in, resolves the role and redirects to the student dashboard.
-        // Any problem (wrong password, missing profile, disabled account)
-        // shows a clear message here instead of failing silently.
-        // Loader stays visible until the redirect happens.
-        await handlePhoneLogin(identifier, password);
-      } catch (error) {
-        loader.style.display = "none";
-        errorDiv.textContent = error.message;
-        errorDiv.style.display = "block";
-      }
-    });
-
     const $id = (id) => document.getElementById(id);
 
     const showError = (msg) => {
@@ -427,18 +415,87 @@
       errorDiv.style.display = "block";
     };
 
-    // Account creation moved to its own page — this one has a single form and
-    // no tab strip (owner: "separate Login and Create Account pages").
+    /* ── Website hand-off ───────────────────────────────────────────────
+       The booking form on www.shreejilibrary.co.in is a DIFFERENT origin, so
+       it cannot reach this page's localStorage. It therefore carries the
+       visitor's details in the URL HASH (#name=…&phone=…&email=…), which is
+       never sent to the server — the fields are simply pre-filled so nobody
+       types the same thing twice. */
+    const readHashPrefill = () => {
+      const out = {};
+      const raw = String(window.location.hash || "").replace(/^#/, "");
+      if (!raw) return out;
+      raw.split("&").forEach((pair) => {
+        const i = pair.indexOf("=");
+        if (i < 1) return;
+        const k = decodeURIComponent(pair.slice(0, i)).toLowerCase();
+        const v = decodeURIComponent(pair.slice(i + 1).replace(/\+/g, " ")).trim();
+        if (v) out[k] = v;
+      });
+      return out;
+    };
 
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("registered") === "1") {
-      errorDiv.textContent = "Account created successfully! Please sign in.";
-      errorDiv.style.color = "#059669";
-      errorDiv.style.background = "#d1fae5";
-      errorDiv.style.borderColor = "#6ee7b7";
-      errorDiv.style.display = "block";
+    const prefill = readHashPrefill();
+    if (prefill.name && !$id("su-name").value) {
+      $id("su-name").value = prefill.name;
     }
+    const idEl = $id("su-identifier");
+    if (idEl && !idEl.value) {
+      const rawId = prefill.phone || prefill.mobile || prefill.email || prefill.identifier || "";
+      const digits = String(rawId).replace(/\D/g, "");
+      idEl.value = digits.length === 10 ? digits : rawId;
+    }
+    // Drop the hand-off payload once it has been read so it does not sit in
+    // the address bar / browser history for the rest of the session.
+    if (window.location.hash) history.replaceState(null, "", window.location.pathname);
+
+    const suEye = $id("su-eye");
+    if (suEye) {
+      suEye.addEventListener("click", () => {
+        const pw = $id("su-password");
+        const wasHidden = pw.type === "password";
+        pw.type = wasHidden ? "text" : "password";
+        suEye.textContent = wasHidden ? "🙈" : "👁";
+      });
+    }
+
+    /* ── Sign up ────────────────────────────────────────────────────── */
+    $id("signup-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorDiv.style.display = "none";
+
+      const name = $id("su-name").value.trim();
+      const identifier = $id("su-identifier").value.trim();
+      const password = $id("su-password").value;
+      const confirm = $id("su-confirm").value;
+
+      if (!name) return showError("Please enter your full name.");
+      if (password.length < 6) return showError("Password must be at least 6 characters.");
+      if (password !== confirm) return showError("Passwords do not match.");
+
+      const btn = $id("btn-signup");
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Creating account…";
+      loader.style.display = "flex";
+
+      try {
+        // Creates the Auth account first, then writes users/{uid} and
+        // students/{uid} in ONE transaction — adopting an existing record
+        // instead of creating a duplicate. See onboardingService.js.
+        const { completeSignup } = await import("./services/onboardingService.js");
+        const res = await completeSignup({ identifier, password, name });
+        localStorage.setItem("userRole", "Student");
+        localStorage.setItem("userId", res.uid);
+        window.location.href = "/student/dashboard.html";
+      } catch (err) {
+        loader.style.display = "none";
+        btn.disabled = false;
+        btn.textContent = label;
+        showError(err.message || "Could not create the account.");
+      }
+    });
+
   </script>
 </body>
-
 </html>

@@ -28,6 +28,7 @@ export const protectRoute = (role, path) => {
 
   // Public auth pages: leave alone.
   if (norm.endsWith("login.html") || norm === "/login"
+    || norm.endsWith("register.html") || norm === "/register"
     || norm.endsWith("forgot-password.html") || norm === "/forgot-password"
     || norm.endsWith("unauthorized.html") || norm === "/unauthorized") return;
 

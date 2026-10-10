@@ -322,6 +322,10 @@ export const completeSignup = async ({ identifier, password, name }) => {
         paymentScreenshotUrl: "",
         status: "Pending",
         approvalStatus: "Pending",
+        // Owner rule: the admin's admission alert / Pending-approval badge must
+        // stay SILENT until this student has filed the entire onboarding form.
+        // See submitPaymentAndApplication for the flip to true.
+        applicationReady: false,
         studentId,
         admissionNo: studentId,
         createdAt: serverTimestamp()
@@ -449,6 +453,9 @@ export const ensureStudentRecord = async () => {
     role: "Student",
     status: "Pending",
     approvalStatus: "Pending",
+    // Not yet an application — nothing for the admin to see until the wizard's
+    // final submit flips this (see submitPaymentAndApplication).
+    applicationReady: false,
     isStudentSubmission: true,
     source: "Portal",
     studentId: "", admissionNo: "",
@@ -610,7 +617,14 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         transactionId: transactionId || "",
         paymentScreenshotUrl: paymentScreenshotUrl || "",
         termsAccepted: true,
-        updatedAt: now
+        updatedAt: now,
+        // THE gate for the admin's admission alert. This is the last step of
+        // the onboarding wizard, so flipping it here is exactly "after the
+        // student fills the entire onboarding form — then and only then".
+        // `submittedAt` is also where the admin's 7-day auto-expire counts
+        // from, so a long-abandoned sign-up still gets its full week.
+        applicationReady: true,
+        submittedAt: now
       };
       // Pay Later records a due date; Pay Now clears any due date left over
       // from an earlier attempt so the pending screen can never show both.

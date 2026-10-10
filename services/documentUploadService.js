@@ -561,12 +561,14 @@ const DOC_TYPES = [
   {
     key: "aadhaarFront",
     label: "Aadhaar Front",
+    sub: "Click to select",
     accept: "image/*,.pdf",
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>`
   },
   {
     key: "aadhaarBack",
     label: "Aadhaar Back",
+    sub: "Click to select",
     accept: "image/*,.pdf",
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect width="20" height="14" x="2" y="5" rx="2"/><circle cx="8" cy="12" r="2"/><line x1="14" x2="18" y1="11" y2="11"/><line x1="14" x2="18" y1="14" y2="14"/></svg>`
   },
@@ -575,29 +577,51 @@ const DOC_TYPES = [
     // the same `photo` field.
     key: "photo",
     label: "Photo",
+    sub: "Upload or take selfie",
     accept: "image/*",
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`
+  },
+  {
+    // Its OWN card. The payment step used to render the Photo card and then
+    // patch its visible label in the DOM — leaving "Upload or take selfie" and
+    // a "Take Selfie" button underneath, which is what the owner saw.
+    key: "paymentScreenshot",
+    label: "Payment screenshot",
+    sub: "UPI / bank transfer proof",
+    accept: "image/*,.pdf",
+    iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 3h16v18l-3-2-2 2-3-2-3 2-2-2-3 2z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>`
   },
 ];
 
 /**
  * Render the document upload UI inside container.
+ *
  * @param {string} containerId
+ * @param {Object} [opts]
+ * @param {string[]} [opts.keys] render ONLY these cards (e.g. the payment
+ *   step renders just `paymentScreenshot` instead of the whole set).
+ * @param {string}  [opts.title] heading text
+ * @param {string}  [opts.note]  heading's trailing note
  */
-export const initDocumentUploads = (containerId = "doc-upload-section") => {
+export const initDocumentUploads = (containerId = "doc-upload-section", opts = {}) => {
   const container = document.getElementById(containerId);
   if (!container) return;
+
+  const keys = Array.isArray(opts.keys) && opts.keys.length ? opts.keys : null;
+  const types = keys ? DOC_TYPES.filter(d => keys.indexOf(d.key) !== -1) : DOC_TYPES;
+  const title = opts.title || "Document Uploads";
+  const note = opts.note || "(Optional · stored securely)";
 
   container.innerHTML = `
     <label style="display:block;font-size:12.5px;font-weight:600;color:var(--text-secondary);
       text-transform:uppercase;letter-spacing:.04em;margin-bottom:.75rem;">
-      Document Uploads
+      ${title}
       <span style="color:var(--text-muted);font-weight:400;text-transform:none;margin-left:4px;">
-        (Optional · stored securely)
+        ${note}
       </span>
     </label>
     <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:0.75rem;">
-      ${DOC_TYPES.map(d => {
+      ${types.map(d => {
     if (d.key === "photo") {
       // Single photo card: click uploads a file, dedicated button takes a
       // live selfie — both write the SAME `photo` field. No duplicates.
@@ -621,7 +645,7 @@ export const initDocumentUploads = (containerId = "doc-upload-section") => {
               <div id="doc-placeholder-${d.key}">
                 <div style="display:flex;justify-content:center;margin-bottom:.4rem;color:var(--primary);">${d.iconSvg}</div>
                 <div style="font-size:12px;font-weight:600;color:var(--text-primary);">${d.label}</div>
-                <div id="doc-sublabel-${d.key}" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Upload or take selfie</div>
+                <div id="doc-sublabel-${d.key}" style="font-size:11px;color:var(--text-muted);margin-top:2px;">${d.sub || "Upload or take selfie"}</div>
               </div>
               <div id="doc-name-${d.key}" style="font-size:11px;color:var(--accent-emerald);
                 margin-top:.3rem;display:none;word-break:break-all;"></div>
@@ -651,7 +675,7 @@ export const initDocumentUploads = (containerId = "doc-upload-section") => {
               <div id="doc-placeholder-${d.key}">
                 <div style="display:flex;justify-content:center;margin-bottom:.4rem;color:var(--primary);">${d.iconSvg}</div>
                 <div style="font-size:12px;font-weight:600;color:var(--text-primary);">${d.label}</div>
-                <div id="doc-sublabel-${d.key}" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Click to select</div>
+                <div id="doc-sublabel-${d.key}" style="font-size:11px;color:var(--text-muted);margin-top:2px;">${d.sub || "Click to select"}</div>
               </div>
               <div id="doc-name-${d.key}" style="font-size:11px;color:var(--accent-emerald);
                 margin-top:.3rem;display:none;word-break:break-all;"></div>
@@ -832,6 +856,7 @@ export const getSelectedDocumentFiles = () => {
     aadhaarBack: getFile("doc-input-aadhaarBack"),
     photo,
     selfie: photo, // legacy alias
+    paymentScreenshot: getFile("doc-input-paymentScreenshot"),
   };
 };
 
