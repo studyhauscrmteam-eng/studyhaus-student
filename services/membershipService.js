@@ -168,10 +168,9 @@ const listenToPlans = () => {
         `;
       }
 
-      // "Most Popular" comes from the plan itself (Featured toggle / badge in
-      // Website-manager), with the legacy Rotational Seat fallback — so the
-      // Membership card always matches what the website shows.
-      const isPopular = plan.featured === true || plan.planName === "Rotational Seat";
+      // "Most Popular" mirrors the plan's own featured flag — truth only,
+      // no name-based fallback: no flag, no badge.
+      const isPopular = plan.featured === true;
       const cardClass = isPopular ? "plan-card featured" : "plan-card";
       const badgeHtml = isPopular ? `<div class="plan-badge">${plan.badge || "Popular"}</div>` : "";
 

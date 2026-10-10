@@ -87,7 +87,7 @@
     .auth-desc {
       font-size: 0.85rem;
       color: #64748b;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
       line-height: 1.4;
     }
 
@@ -101,30 +101,39 @@
       text-decoration: underline;
     }
 
+    /* Single Sign in / Create account switcher — one page, two tabs */
     .auth-tabs {
       display: flex;
+      gap: 4px;
       background: #f1f5f9;
-      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
       padding: 4px;
       margin-bottom: 1.5rem;
     }
 
     .auth-tab {
       flex: 1;
-      text-align: center;
-      font-size: 0.85rem;
-      font-weight: 500;
+      padding: 9px 12px;
+      font-size: 13.5px;
+      font-weight: 600;
       color: #64748b;
-      padding: 8px 12px;
-      border-radius: 6px;
-      text-decoration: none;
-      transition: all 0.2s;
+      background: transparent;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background .15s, color .15s, box-shadow .15s;
+    }
+
+    .auth-tab:hover {
+      color: #0f172a;
     }
 
     .auth-tab.active {
-      color: #0f172a;
-      background: white;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      background: #ffffff;
+      color: #059669;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .1);
     }
 
     .form-group {
@@ -249,46 +258,12 @@
       }
     }
 
-    /* Sign in / Sign up switcher */
-    .auth-tabs {
-      display: flex;
-      gap: 4px;
-      background: #f1f5f9;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 4px;
-      margin-bottom: 1.25rem;
-    }
-
-    .auth-tab {
-      flex: 1;
-      padding: 9px 12px;
-      font-size: 13.5px;
-      font-weight: 600;
-      color: #64748b;
-      background: transparent;
-      border: none;
-      border-radius: 7px;
-      cursor: pointer;
-      font-family: inherit;
-      transition: background .15s, color .15s, box-shadow .15s;
-    }
-
-    .auth-tab:hover {
-      color: #0f172a;
-    }
-
-    .auth-tab.active {
-      background: #ffffff;
-      color: #059669;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, .1);
-    }
-
     .auth-hint {
       font-size: 12.5px;
       color: #64748b;
       line-height: 1.55;
       margin-top: .875rem;
+      text-align: center;
     }
 
     .auth-hint a {
@@ -307,6 +282,21 @@
       color: #94a3b8;
       margin-top: 6px;
       line-height: 1.5;
+    }
+
+    .forgot-link {
+      display: block;
+      text-align: right;
+      font-size: 12.5px;
+      color: #059669;
+      font-weight: 500;
+      text-decoration: none;
+      margin-top: -0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .forgot-link:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -335,30 +325,71 @@
     </div>
 
     <div class="auth-card">
-      <!-- Login ONLY. Account creation lives on its own page: /register.html -->
+      <!-- ONE page for both: Sign in + Create account switch via tabs -->
       <h1 class="auth-title" id="auth-title">Sign in to your account</h1>
       <p class="auth-desc" id="auth-desc">Student Portal — sign in with your phone number or email.</p>
 
+      <div class="auth-tabs" role="tablist">
+        <button type="button" class="auth-tab active" id="tab-signin" role="tab">Sign in</button>
+        <button type="button" class="auth-tab" id="tab-signup" role="tab">Create account</button>
+      </div>
+
       <div id="error-message"></div>
 
+      <!-- ── Sign in ─────────────────────────────────────────────────── -->
       <form id="login-form">
         <div class="form-group">
           <label>Phone Number / Email</label>
-          <input type="text" id="email" required placeholder="9876543210 or student@example.com" />
+          <input type="text" id="email" required placeholder="9876543210 or student@example.com" autocomplete="username"
+            autocapitalize="none" autocorrect="off" spellcheck="false" />
         </div>
         <div class="form-group">
           <label>Password</label>
           <div class="pw-wrap">
-            <input type="password" id="password" required placeholder="••••••••"
+            <input type="password" id="password" required placeholder="••••••••" autocomplete="current-password"
               autocapitalize="none" autocorrect="off" spellcheck="false" />
             <button type="button" class="pw-eye" id="pw-eye" title="Show / hide password" aria-label="Show password">👁</button>
           </div>
         </div>
+        <a class="forgot-link" href="/forgot-password.html">Forgot password?</a>
 
         <button type="submit" class="btn-submit">Sign in</button>
+      </form>
+
+      <!-- ── Create account ──────────────────────────────────────────── -->
+      <form id="signup-form" style="display:none;">
+        <div class="form-group">
+          <label>Full name</label>
+          <input type="text" id="su-name" placeholder="Your full name" autocomplete="name" />
+        </div>
+
+        <div class="form-group">
+          <label>Mobile number or Email</label>
+          <input type="text" id="su-identifier" placeholder="9876543210 or student@example.com"
+            autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+          <div class="pw-req">This becomes your login ID — use your mobile number, or your email.</div>
+        </div>
+
+        <div class="form-group">
+          <label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="su-password" minlength="6"
+              placeholder="At least 6 characters" autocomplete="new-password" />
+            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password">👁</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Confirm password</label>
+          <input type="password" id="su-confirm" minlength="6"
+            placeholder="Repeat your password" autocomplete="new-password" />
+        </div>
+
+        <button type="submit" class="btn-submit" id="btn-signup">Create account</button>
 
         <p class="auth-hint">
-          First time here? <a href="/register.html">Create your account →</a>
+          Your account is created immediately. After that a short 5-step form
+          collects your details, documents, plan, seat and payment.
         </p>
       </form>
     </div>
@@ -381,62 +412,177 @@
 
     initAuthGuard();
 
-    const form = document.getElementById("login-form");
-    const errorDiv = document.getElementById("error-message");
-    const loader = document.getElementById("global-loader");
+    const $id = (id) => document.getElementById(id);
+    const errorDiv = $id("error-message");
+    const loader = $id("global-loader");
+    const loginForm = $id("login-form");
+    const signupForm = $id("signup-form");
+    const tabSignin = $id("tab-signin");
+    const tabSignup = $id("tab-signup");
+    const authTitle = $id("auth-title");
+    const authDesc = $id("auth-desc");
 
-    const pwEye = document.getElementById("pw-eye");
-    if (pwEye) {
-      pwEye.addEventListener("click", () => {
-        const pw = document.getElementById("password");
+    const showError = (msg, ok = false) => {
+      errorDiv.textContent = msg;
+      if (ok) {
+        errorDiv.style.color = "#059669";
+        errorDiv.style.background = "#d1fae5";
+        errorDiv.style.borderColor = "#6ee7b7";
+      } else {
+        errorDiv.style.color = "#e53e3e";
+        errorDiv.style.background = "#fee2e2";
+        errorDiv.style.borderColor = "#fecaca";
+      }
+      errorDiv.style.display = "block";
+    };
+    const hideError = () => { errorDiv.style.display = "none"; };
+
+    /* ── Tab switching: one page, two modes ─────────────────────────── */
+    const setTab = (mode, pushUrl = true) => {
+      const isSignup = mode === "signup";
+      tabSignin.classList.toggle("active", !isSignup);
+      tabSignup.classList.toggle("active", isSignup);
+      loginForm.style.display = isSignup ? "none" : "";
+      signupForm.style.display = isSignup ? "" : "none";
+      hideError();
+      if (isSignup) {
+        authTitle.textContent = "Create your account";
+        authDesc.textContent = "Your login ID is your mobile number or email — then a short 5-step form collects the rest.";
+      } else {
+        authTitle.textContent = "Sign in to your account";
+        authDesc.textContent = "Student Portal — sign in with your phone number or email.";
+      }
+      if (pushUrl) {
+        const url = new URL(window.location.href);
+        if (isSignup) url.searchParams.set("tab", "signup");
+        else url.searchParams.delete("tab");
+        history.replaceState(null, "", url.pathname + url.search + url.hash);
+      }
+    };
+
+    tabSignin.addEventListener("click", () => setTab("signin"));
+    tabSignup.addEventListener("click", () => setTab("signup"));
+
+    /* ── Password eyes ──────────────────────────────────────────────── */
+    const bindEye = (btnId, inputId) => {
+      const btn = $id(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        const pw = $id(inputId);
         if (!pw) return;
         const wasHidden = pw.type === "password";
         pw.type = wasHidden ? "text" : "password";
-        pwEye.textContent = wasHidden ? "🙈" : "👁";
+        btn.textContent = wasHidden ? "🙈" : "👁";
       });
-    }
+    };
+    bindEye("pw-eye", "password");
+    bindEye("su-eye", "su-password");
 
-    form.addEventListener("submit", async (e) => {
+    /* ── Sign in submit ─────────────────────────────────────────────── */
+    loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      errorDiv.style.display = "none";
+      hideError();
       loader.style.display = "flex";
 
-      const identifier = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
+      const identifier = $id("email").value.trim();
+      const password = $id("password").value;
 
       try {
         // Signs in, resolves the role and redirects to the student dashboard.
-        // Any problem (wrong password, missing profile, disabled account)
-        // shows a clear message here instead of failing silently.
         // Loader stays visible until the redirect happens.
         await handlePhoneLogin(identifier, password);
       } catch (error) {
         loader.style.display = "none";
-        errorDiv.textContent = error.message;
-        errorDiv.style.display = "block";
+        showError(error.message);
       }
     });
 
-    const $id = (id) => document.getElementById(id);
+    /* ── Sign up submit ─────────────────────────────────────────────── */
+    signupForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      hideError();
 
-    const showError = (msg) => {
-      errorDiv.textContent = msg;
-      errorDiv.style.color = "#e53e3e";
-      errorDiv.style.background = "#fee2e2";
-      errorDiv.style.borderColor = "#fecaca";
-      errorDiv.style.display = "block";
+      const name = $id("su-name").value.trim();
+      const identifier = $id("su-identifier").value.trim();
+      const password = $id("su-password").value;
+      const confirm = $id("su-confirm").value;
+
+      if (!name) return showError("Please enter your full name.");
+      if (!identifier) return showError("Please enter your mobile number or email.");
+      if (password.length < 6) return showError("Password must be at least 6 characters.");
+      if (password !== confirm) return showError("Passwords do not match.");
+
+      const btn = $id("btn-signup");
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Creating account…";
+      loader.style.display = "flex";
+
+      try {
+        // Creates the Auth account first, then writes users/{uid} and
+        // students/{uid} in ONE transaction. See onboardingService.js.
+        const { completeSignup } = await import("./services/onboardingService.js");
+        const res = await completeSignup({ identifier, password, name });
+        localStorage.setItem("userRole", "Student");
+        localStorage.setItem("userId", res.uid);
+        window.location.href = "/student/dashboard.html";
+      } catch (err) {
+        loader.style.display = "none";
+        btn.disabled = false;
+        btn.textContent = label;
+        showError(err.message || "Could not create the account.");
+      }
+    });
+
+    /* ── Deep-link + website hand-off ─────────────────────────────────
+       ?tab=signup (or #signup) opens the Create account tab directly.
+       The booking form on www.shreejilibrary.co.in is a DIFFERENT origin,
+       so it carries the visitor's details in the URL HASH
+       (#name=…&phone=…&email=…), which is never sent to the server — the
+       fields are simply pre-filled so nobody types the same thing twice. */
+    const readHashPrefill = () => {
+      const out = {};
+      const raw = String(window.location.hash || "").replace(/^#/, "");
+      if (!raw) return out;
+      if (raw.toLowerCase() === "signup") return out;
+      raw.split("&").forEach((pair) => {
+        const i = pair.indexOf("=");
+        if (i < 1) return;
+        const k = decodeURIComponent(pair.slice(0, i)).toLowerCase();
+        const v = decodeURIComponent(pair.slice(i + 1).replace(/\+/g, " ")).trim();
+        if (v) out[k] = v;
+      });
+      return out;
     };
 
-    // Account creation moved to its own page — this one has a single form and
-    // no tab strip (owner: "separate Login and Create Account pages").
-
     const params = new URLSearchParams(window.location.search);
+    const wantsSignup = params.get("tab") === "signup" || params.get("mode") === "signup"
+      || window.location.hash.toLowerCase() === "#signup";
+    const prefill = readHashPrefill();
+    const hasPrefill = !!(prefill.name || prefill.phone || prefill.mobile || prefill.email || prefill.identifier);
+
+    if (wantsSignup || hasPrefill) {
+      setTab("signup", false);
+      if (prefill.name && !$id("su-name").value) $id("su-name").value = prefill.name;
+      const idEl = $id("su-identifier");
+      if (idEl && !idEl.value) {
+        const rawId = prefill.phone || prefill.mobile || prefill.email || prefill.identifier || "";
+        const digits = String(rawId).replace(/\D/g, "");
+        idEl.value = digits.length === 10 ? digits : rawId;
+      }
+      // Drop the hand-off payload once read so it does not sit in the
+      // address bar / browser history for the rest of the session.
+      if (window.location.hash && window.location.hash !== "#signup") {
+        const url = new URL(window.location.href);
+        history.replaceState(null, "", url.pathname + url.search);
+      }
+    } else {
+      setTab("signin", false);
+    }
+
     if (params.get("registered") === "1") {
-      errorDiv.textContent = "Account created successfully! Please sign in.";
-      errorDiv.style.color = "#059669";
-      errorDiv.style.background = "#d1fae5";
-      errorDiv.style.borderColor = "#6ee7b7";
-      errorDiv.style.display = "block";
+      setTab("signin", false);
+      showError("Account created successfully! Please sign in.", true);
     }
   </script>
 </body>
