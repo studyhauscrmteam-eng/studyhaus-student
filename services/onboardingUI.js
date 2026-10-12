@@ -82,39 +82,50 @@ const progressHtml = (state, student, documents, plan) => {
 const shell = (state, student, documents, plan, body, footer) => `
   <div id="onb-wizard">
   <style>
-    /* Wizard controls, themed to the portal palette. Raw browser selects were
-       the "bogus" dropdowns: flat, unstyled and visually unrelated to the
-       rest of the app. */
+    /* Wizard controls — premium themed selects/inputs matching the portal.
+       Raw browser selects looked flat and unrelated to the app. */
     #onb-wizard select,
     #onb-wizard input,
     #onb-wizard textarea {
       font-family: inherit;
       font-size: 14px;
+      font-weight: 500;
+      border-radius: 10px;
       transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
     }
     #onb-wizard select {
       appearance: none;
       -webkit-appearance: none;
-      padding-right: 2.4rem;
+      -moz-appearance: none;
+      padding-right: 2.6rem;
       cursor: pointer;
+      font-weight: 600;
+      line-height: 1.4;
+      background-color: var(--bg-card);
       background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
-      background-position: right .8rem center;
+      background-position: right .85rem center;
       background-size: 15px 15px;
+    }
+    body.light-mode #onb-wizard select {
+      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
     }
     #onb-wizard select:hover,
     #onb-wizard input:hover,
-    #onb-wizard textarea:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+    #onb-wizard textarea:hover { border-color: var(--border-bright); background-color: var(--bg-hover); }
     #onb-wizard select:focus,
     #onb-wizard input:focus,
     #onb-wizard textarea:focus {
       outline: none;
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+      border-color: var(--accent-emerald, var(--primary));
+      background-color: var(--bg-card);
+      box-shadow: 0 0 0 3px rgba(16,185,129,.18);
     }
-    #onb-wizard select:invalid { color: var(--text-muted); }
-    #onb-wizard option { background: var(--bg-card); color: var(--text-primary); padding: 8px; }
-    #onb-wizard option:checked { background: var(--primary); color: #fff; }
+    #onb-wizard select:invalid { color: var(--text-muted); font-weight: 500; }
+    #onb-wizard select:valid { color: var(--text-primary); }
+    #onb-wizard option { background: var(--bg-card); color: var(--text-primary); padding: 10px 12px; font-size: 14px; }
+    #onb-wizard option:checked { background: var(--accent-emerald, var(--primary)); color: #fff; }
+    #onb-wizard option:hover, #onb-wizard option:focus { background: var(--bg-hover); }
     #onb-wizard .form-group label { color: var(--text-primary); }
     #onb-wizard textarea { resize: vertical; line-height: 1.5; }
     @media (max-width: 760px) {
@@ -453,7 +464,14 @@ export const renderOnboarding = async (opts) => {
   if (state === STATE.DOCUMENTS) {
     const status = document.getElementById("onb-doc-status");
     import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-      initDocumentUploads("onb-docs");
+      // Identity step = Aadhaar front/back + photo ONLY. The payment
+      // screenshot lives on the PAYMENT step — rendering it here as well
+      // confused students (extra card + wrong count).
+      initDocumentUploads("onb-docs", {
+        keys: ["aadhaarFront", "aadhaarBack", "photo"],
+        title: "Identity documents",
+        note: "(all 3 required)"
+      });
       window.__onbGetFiles = getSelectedDocumentFiles;
       window.__onbUploadFiles = uploadAdmissionDocuments;
       if (status) {
@@ -500,13 +518,11 @@ export const renderOnboarding = async (opts) => {
 
   if (state === STATE.PAYMENT) {
     import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-      // ONE card with its OWN label. This step used to render the Photo card
-      // and patch the visible text afterwards, which left "Upload or take
-      // selfie" and a big [Take Selfie] button under the payment heading —
-      // the mislabel the owner reported.
+      // Payment proof is a SCREENSHOT file — never a live selfie, so this
+      // card deliberately has no camera / Take Selfie button (file picker only).
       initDocumentUploads("onb-shot-docs", {
         keys: ["paymentScreenshot"],
-        title: "Payment screenshot",
+        title: "Payment screenshot (file upload only — no camera)",
         note: "(required when paying now)"
       });
       window.__onbGetFiles = getSelectedDocumentFiles;
@@ -540,8 +556,19 @@ export const renderOnboarding = async (opts) => {
   const backBtn = container.querySelector("[data-onb-back]");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
-      const prev = WIZARD_STEPS[stepIdx - 1];
-      if (prev) onAdvance(prev.key);
+      // Walk back skipping the SEAT step when the chosen plan has no seat
+      // preference — otherwise Back from PAYMENT lands on an n/a screen.
+      let idx = stepIdx - 1;
+      while (idx >= 0) {
+        const cand = WIZARD_STEPS[idx];
+        if (cand && cand.key === STATE.SEAT && !planRequiresSeat(plan)) { idx--; continue; }
+        break;
+      }
+      const prev = idx >= 0 ? WIZARD_STEPS[idx] : null;
+      if (prev) {
+        backBtn.disabled = true;
+        onAdvance(prev.key);
+      }
     });
   }
 

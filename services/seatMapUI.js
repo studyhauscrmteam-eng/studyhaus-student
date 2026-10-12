@@ -136,12 +136,13 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         return arr;
       };
 
+      const SEAT_TILE_H = "52px";
       const renderSignupSeatCard = (seatNumStr) => {
         let seat = findSeatByLayoutName(floorSeats, seatNumStr);
         
         if (!seat) {
           return `
-            <div style="background:var(--bg-hover); border:1px dashed var(--border-bright); border-radius: 8px; height: 46px; display: flex; align-items: center; justify-content: center; color:var(--text-muted); font-size: 13px; cursor: not-allowed; opacity: 0.55; width: 100%;" title="Seat not available">
+            <div style="background:var(--bg-hover); border:1px dashed var(--border-bright); border-radius: 10px; height: ${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; box-sizing:border-box; display: flex; align-items: center; justify-content: center; color:var(--text-muted); font-size: 13px; font-weight:700; cursor: not-allowed; opacity: 0.55; width: 100%; flex:0 0 ${SEAT_TILE_H};" title="Seat not available">
               ${seatNumStr}
             </div>
           `;
@@ -161,9 +162,9 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
             onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable})"
             title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
             style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
-                   border-radius:10px; height:52px; display:flex; align-items:center;
+                   border-radius:10px; height:${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; box-sizing:border-box; display:flex; align-items:center;
                    justify-content:center; cursor:${cursor}; transition:transform .12s, box-shadow .15s, border-color .15s;
-                   font-size:13.5px; font-weight:700; letter-spacing:.02em; width: 100%;
+                   font-size:13.5px; font-weight:700; letter-spacing:.02em; width: 100%; flex:0 0 ${SEAT_TILE_H};
                    box-shadow:0 1px 2px rgba(0,0,0,.07);"
             onmouseover="if(${isPickable}) { this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 14px rgba(0,0,0,.18)'; }"
             onmouseout="this.style.transform='none'; this.style.boxShadow='0 1px 2px rgba(0,0,0,.07)';"
@@ -174,10 +175,10 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       };
 
       const renderSignupCustomColHtml = (arr) => {
-        let colHtml = `<div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">`;
+        let colHtml = `<div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; align-items: stretch;">`;
         arr.forEach(num => { 
           if(num === null) {
-            colHtml += `<div style="height: 46px; width: 100%;"></div>`;
+            colHtml += `<div style="height: ${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; width: 100%; flex:0 0 ${SEAT_TILE_H};"></div>`;
           } else {
             colHtml += renderSignupSeatCard(num); 
           }
@@ -246,20 +247,26 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       }
 
       let html = "";
+      // Room shell matches the admin map: same padding/gaps/alignment so seat
+      // rows line up. All tiles are a fixed 52px (see SEAT_TILE_H) and every
+      // column uses align-items:flex-start — the missing alignment + mixed
+      // 46/52px heights were what pushed some columns upward.
+      const roomInner = (cols) => `
+        <div style="display:flex; gap:0.75rem; justify-content:center; align-items:flex-start; width:100%; max-width:760px; margin:0 auto;">
+          ${cols}
+        </div>`;
       if (signupCurrentFloor === "First Floor") {
         html = `
-          <div style="background:var(--bg-card); padding: 2rem 1rem 4rem 1rem; border-radius: 12px; position: relative; border:1px solid var(--border); margin-bottom: 1rem; overflow-x: auto;">
+          <div style="background:var(--bg-card); padding: 3rem 1.5rem 4rem 1.5rem; border-radius: 12px; position: relative; border:1px solid var(--border); margin-bottom: 1rem; overflow-x: auto;">
             <!-- Door -->
             <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); background:var(--bg-hover); border:1px solid var(--border); border-top: none; padding: 0.25rem 1.5rem; border-radius: 0 0 8px 8px; font-weight: 700; color:var(--text-secondary); letter-spacing: 1px; font-size: 11px;">
               DOOR
             </div>
             
-            <div style="display: flex; gap: 0.75rem; justify-content: center; min-width: max-content; width: 100%;">
-              ${renderSignupCustomColHtml(firstCol1)}
+            ${roomInner(`${renderSignupCustomColHtml(firstCol1)}
               ${renderSignupCustomColHtml(firstCol2)}
               ${renderSignupCustomColHtml(firstCol3)}
-              ${renderSignupCustomColHtml(firstCol4)}
-            </div>
+              ${renderSignupCustomColHtml(firstCol4)}`)}
 
             <!-- Toilets -->
             <div style="position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; pointer-events: none;">
@@ -274,18 +281,16 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         `;
       } else if (signupCurrentFloor === "Ground Floor") {
         html = `
-          <div style="background:var(--bg-card); padding: 2rem 1rem 4rem 1rem; border-radius: 12px; position: relative; border:1px solid var(--border); overflow-x: auto;">
+          <div style="background:var(--bg-card); padding: 3rem 1.5rem 4rem 1.5rem; border-radius: 12px; position: relative; border:1px solid var(--border); overflow-x: auto;">
             <!-- Door -->
             <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); background:var(--bg-hover); border:1px solid var(--border); border-top: none; padding: 0.25rem 1.5rem; border-radius: 0 0 8px 8px; font-weight: 700; color:var(--text-secondary); letter-spacing: 1px; font-size: 11px;">
               DOOR
             </div>
             
-            <div style="display: flex; gap: 0.75rem; justify-content: center; min-width: max-content; width: 100%; align-items: flex-start;">
-              ${renderSignupCustomColHtml(groundCol1)}
+            ${roomInner(`${renderSignupCustomColHtml(groundCol1)}
               ${renderSignupCustomColHtml(groundCol2)}
               ${renderSignupCustomColHtml(groundCol3)}
-              ${renderSignupCustomColHtml(groundCol4)}
-            </div>
+              ${renderSignupCustomColHtml(groundCol4)}`)}
 
             <!-- Toilets -->
             <div style="position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; pointer-events: none;">

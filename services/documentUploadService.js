@@ -582,12 +582,11 @@ const DOC_TYPES = [
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`
   },
   {
-    // Its OWN card. The payment step used to render the Photo card and then
-    // patch its visible label in the DOM — leaving "Upload or take selfie" and
-    // a "Take Selfie" button underneath, which is what the owner saw.
+    // Its OWN card. File upload ONLY — a payment screenshot (SS), never a
+    // live selfie, so there is deliberately no camera / Take Selfie button.
     key: "paymentScreenshot",
     label: "Payment screenshot",
-    sub: "UPI / bank transfer proof",
+    sub: "Upload screenshot file · no camera needed",
     accept: "image/*,.pdf",
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 3h16v18l-3-2-2 2-3-2-3 2-2-2-3 2z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>`
   },
@@ -649,9 +648,14 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
               </div>
               <div id="doc-name-${d.key}" style="font-size:11px;color:var(--accent-emerald);
                 margin-top:.3rem;display:none;word-break:break-all;"></div>
-              <button type="button" onclick="event.stopPropagation();window.__openSelfieCamera()"
-                style="margin-top:.5rem;width:100%;padding:7px;border-radius:8px;border:1px solid var(--border);
-                background:var(--bg-hover);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;">Take Selfie</button>
+              <div style="display:flex;gap:.4rem;margin-top:.6rem;">
+                <button type="button" onclick="event.stopPropagation();document.getElementById('doc-input-${d.key}').click()"
+                  style="flex:1;padding:8px 6px;border-radius:9px;border:1px solid var(--border-bright);
+                  background:var(--bg-hover);color:var(--text-primary);font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload</button>
+                <button type="button" onclick="event.stopPropagation();window.__openSelfieCamera()"
+                  style="flex:1;padding:8px 6px;border-radius:9px;border:1px solid transparent;
+                  background:var(--accent-emerald,#10b981);color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Selfie</button>
+              </div>
             </div>
           `;
     } else {
@@ -701,17 +705,43 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
   if (!document.getElementById("selfie-camera-modal")) {
     const modalDiv = document.createElement("div");
     modalDiv.innerHTML = `
-      <dialog id="selfie-camera-modal" style="padding:0; border:none; border-radius:12px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.1); width:90%; max-width:400px; background:var(--bg-card,#fff); color:var(--text-primary,#0f172a);">
-        <div style="padding:1.5rem; border-bottom:1px solid var(--border,#e2e8f0);">
-          <h2 style="font-size:1.25rem; font-weight:700; margin:0;">Take Selfie</h2>
-        </div>
-        <div style="padding:1.5rem; text-align:center;">
-          <div style="background:#000; border-radius:8px; overflow:hidden; position:relative; width:100%; height:auto; aspect-ratio:3/4; display:flex; align-items:center; justify-content:center;">
-             <video id="selfie-video" autoplay muted playsInline style="width:100%; height:100%; object-fit:cover;"></video>
+      <dialog id="selfie-camera-modal" class="selfie-modal">
+        <style>
+          #selfie-camera-modal.selfie-modal { padding:0; border:none; border-radius:16px; width:calc(100vw - 32px); max-width:420px; margin:auto; background:var(--bg-card,#fff); color:var(--text-primary,#0f172a); box-shadow:0 24px 64px rgba(0,0,0,.45); overflow:hidden; }
+          #selfie-camera-modal.selfie-modal::backdrop { background:rgba(2,8,23,.6); backdrop-filter:blur(6px); }
+          #selfie-camera-modal .selfie-head { display:flex; align-items:center; gap:.75rem; padding:1rem 1.25rem; border-bottom:1px solid var(--border,#e2e8f0); }
+          #selfie-camera-modal .selfie-ico { width:38px; height:38px; border-radius:12px; flex:0 0 38px; display:flex; align-items:center; justify-content:center; background:rgba(16,185,129,.14); color:var(--accent-emerald,#10b981); }
+          #selfie-camera-modal .selfie-title { font-size:1rem; font-weight:700; margin:0; line-height:1.2; }
+          #selfie-camera-modal .selfie-sub { font-size:12px; color:var(--text-muted,#64748b); margin-top:2px; }
+          #selfie-camera-modal .selfie-x { margin-left:auto; width:30px; height:30px; border-radius:50%; border:1px solid var(--border,#e2e8f0); background:transparent; color:var(--text-muted,#64748b); font-size:16px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+          #selfie-camera-modal .selfie-x:hover { background:var(--bg-hover,#f1f5f9); color:var(--text-primary,#0f172a); }
+          #selfie-camera-modal .selfie-body { padding:1.25rem; }
+          #selfie-camera-modal .selfie-frame { position:relative; background:#020817; border-radius:14px; overflow:hidden; border:1px solid var(--border,#e2e8f0); aspect-ratio:4/3; display:flex; align-items:center; justify-content:center; }
+          #selfie-camera-modal .selfie-frame video { width:100%; height:100%; object-fit:cover; display:block; transform:scaleX(-1); }
+          #selfie-camera-modal .selfie-guide { position:absolute; inset:0; pointer-events:none; display:flex; align-items:center; justify-content:center; }
+          #selfie-camera-modal .selfie-guide::before { content:""; width:52%; aspect-ratio:3/4; border:2px dashed rgba(255,255,255,.75); border-radius:999px; box-shadow:0 0 0 999px rgba(2,8,23,.28); }
+          #selfie-camera-modal .selfie-hint { font-size:12px; color:var(--text-muted,#64748b); text-align:center; margin:.8rem 0 0; line-height:1.5; }
+          #selfie-camera-modal .selfie-actions { display:flex; gap:.6rem; margin-top:1.1rem; }
+          #selfie-camera-modal .selfie-actions .btn { flex:1; justify-content:center; padding:.7rem 1rem; border-radius:10px; font-size:13.5px; }
+          @media (max-width:420px){ #selfie-camera-modal .selfie-body{padding:1rem;} }
+        </style>
+        <div class="selfie-head">
+          <div class="selfie-ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div>
+          <div>
+            <h2 class="selfie-title">Take a selfie</h2>
+            <div class="selfie-sub">Center your face in the oval · good lighting works best</div>
           </div>
-          <div style="display:flex; justify-content:space-between; gap:0.75rem; margin-top:1.5rem;">
-            <button type="button" class="btn btn-ghost" onclick="window.__closeSelfieCamera()" style="flex:1; padding:10px 16px; border:1px solid var(--border,#e2e8f0); border-radius:999px; background:transparent;">Cancel</button>
-            <button type="button" class="btn btn-primary" onclick="window.__captureSelfie()" style="flex:1; padding:10px 16px; border:none; border-radius:999px; background:var(--primary); color:#fff;">Capture Selfie</button>
+          <button type="button" class="selfie-x" onclick="window.__closeSelfieCamera()" aria-label="Close">✕</button>
+        </div>
+        <div class="selfie-body">
+          <div class="selfie-frame">
+             <video id="selfie-video" autoplay muted playsinline></video>
+             <div class="selfie-guide"></div>
+          </div>
+          <p class="selfie-hint">This becomes your admission photo — one photo only. You can retake or upload a file instead.</p>
+          <div class="selfie-actions">
+            <button type="button" class="btn btn-ghost" onclick="window.__closeSelfieCamera()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="window.__captureSelfie()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Capture</button>
           </div>
         </div>
       </dialog>

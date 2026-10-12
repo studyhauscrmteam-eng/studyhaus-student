@@ -34,6 +34,19 @@ function toggleTheme() {
 
 // ==================== NAVIGATION ====================
 function navigate(page) {
+  // Onboarding gate: a first-time student must finish the admission wizard
+  // inside student-portal. Keep them there until the portal clears the flag —
+  // otherwise the boot/wizard skeleton flashes and empty pages show behind it.
+  if (window.__onboardingActive && window.localStorage?.getItem("userRole") === "Student") {
+    if (page !== "student-portal") {
+      if (typeof showToast === 'function') showToast("Please complete your admission steps first.", "warning");
+      try {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById('page-student-portal')?.classList.add('active');
+      } catch (_) {}
+      return;
+    }
+  }
   // SPA Authorization check
   const role = localStorage.getItem("userRole");
   if (role === "Employee") {

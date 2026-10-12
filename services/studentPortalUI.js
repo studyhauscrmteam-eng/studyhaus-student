@@ -40,6 +40,10 @@ export const initStudentPortalUI = () => {
   document.getElementById("page-student-payments").innerHTML = "";
   document.getElementById("page-student-attendance").innerHTML = "";
   document.getElementById("page-student-complaints").innerHTML = "";
+  // Boot cover stays up until the first portal snapshot decides wizard vs
+  // dashboard — this is what stops the dashboard flashing for new students.
+  window.__onboardingActive = true;
+  window.__portalFirstRender = false;
 
   // Self-admission summary (new signups pick a plan inside THIS portal).
   // Element-guarded: the portal summary card only has plan + amount.
@@ -126,6 +130,7 @@ export const initStudentPortalUI = () => {
     renderPortal();
   }, (errorMsg) => {
     portalSection.innerHTML = `<div style="padding: 2rem; color: var(--danger); text-align: center;">${errorMsg}</div>`;
+    try { const boot = document.getElementById("portal-boot"); if (boot) boot.style.display = "none"; } catch (_) {}
   });
 
   window.handleCheckIn = async () => {
@@ -386,9 +391,26 @@ const syncStudentChrome = (s, photoUrl, notifCount) => {
 };
 
 // WhatsApp-style student alerts: bell pill, tab badge, beep + toast.
+// Fix for "old notification pops on every refresh": listeners fire in batches
+// (attendance, then payments, then announcements), so the 2nd/3rd render used
+// to mistake late-arriving OLD items for fresh ones. Now we (a) persist seen
+// ids across refreshes, (b) ignore the first 6s of batched loads, and (c) only
+// ever consider UNREAD ids as candidates for "new".
 const S_BASE_TITLE = (typeof document !== "undefined" && document.title) || "Studyhaus";
 let __sNotifFirst = true;
 let __sKnownIds = new Set();
+let __sBootAt = Date.now();
+const sSeenKey = () => `seenNotifs_${(typeof localStorage !== "undefined" && localStorage.getItem("userId")) || "anon"}`;
+const sLoadSeen = () => {
+  try {
+    const raw = localStorage.getItem(sSeenKey()) || "[]";
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch (_) { return new Set(); }
+};
+const sSaveSeen = (set) => {
+  try { localStorage.setItem(sSeenKey(), JSON.stringify([...set].slice(-300))); } catch (_) {}
+};
 
 const sBeep = () => {
   try {
@@ -612,25 +634,39 @@ const renderStudentNotifications = () => {
     else { badge.textContent = "0"; badge.style.display = "none"; }
   }
   // WhatsApp-style: count pill on the bell, (n) on the browser tab,
-  // beep + toast when genuinely new items arrive (skip first render).
+  // beep + toast ONLY for genuinely new UNREAD items arriving after boot.
   sPaintBell(totalUnread);
   sPaintTab(totalUnread);
+  // Only unread ids can ever count as "new" — dismissed items stay silent even
+  // if a listener re-delivers them.
   const currentIds = [];
   if (monthsOwed > 0 && !isRead("due")) currentIds.push("due");
   pendings.forEach(p => { if (!isRead(`pay_${p.id}`)) currentIds.push(`pay_${p.id}`); });
-  opens.forEach(c => currentIds.push(c.resolutionNote ? `creply_${c.id}` : `copen_${c.id}`));
+  opens.forEach(c => {
+    const oid = c.resolutionNote ? `creply_${c.id}` : `copen_${c.id}`;
+    if (!isRead(oid)) currentIds.push(oid);
+  });
   visible.forEach(a => { if (!isRead(`ann_${a.id}`)) currentIds.push(`ann_${a.id}`); });
-  if (!__sNotifFirst) {
-    const fresh = currentIds.filter((id) => !__sKnownIds.has(id));
+  const persistedSeen = sLoadSeen();
+  const bootGrace = (Date.now() - __sBootAt) < 6000;
+  if (!__sNotifFirst && !bootGrace) {
+    const fresh = currentIds.filter((id) => !__sKnownIds.has(id) && !persistedSeen.has(id));
     if (fresh.length > 0) {
       sBeep();
       if (typeof window.showToast === "function") {
-        window.showToast(`🔔 You have ${fresh.length} new notification${fresh.length > 1 ? "s" : ""} — tap the bell.`, "info");
+        window.showToast(`You have ${fresh.length} new notification${fresh.length > 1 ? "s" : ""} — tap the bell.`, "info");
       }
     }
   }
   __sNotifFirst = false;
   __sKnownIds = new Set(currentIds);
+  // Baseline: everything currently on screen counts as seen, so a refresh
+  // tomorrow never re-announces today's items. Capped at 300 ids.
+  try {
+    const merged = sLoadSeen();
+    currentIds.forEach((id) => merged.add(String(id)));
+    sSaveSeen(merged);
+  } catch (_) {}
 
   const toggle = dismissedCount > 0
     ? `<div style="text-align:center; padding:0.5rem;"><button class="btn btn-ghost btn-sm" onclick="window.toggleStudentReadNotifs()">${showReadStudent ? "Hide read" : `Show dismissed (${dismissedCount})`}</button></div>`
@@ -638,7 +674,7 @@ const renderStudentNotifications = () => {
 
   if (!personal && !broadcast) {
     list.innerHTML = `<div style="text-align:center; padding:2.5rem 1rem; color:var(--text-muted);">
-      <div style="font-size:2rem; margin-bottom:0.5rem;">🔔</div>
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;margin:0 auto 0.75rem;color:var(--text-muted);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
       <div style="font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">All caught up</div>
       <div style="font-size:0.85rem;">Fee reminders, payment updates and desk announcements will appear here.</div></div>`;
     return;
@@ -689,6 +725,13 @@ const renderPortal = () => {
   if (!Array.isArray(currentPayments)) currentPayments = [];
   if (!Array.isArray(currentComplaints)) currentComplaints = [];
   if (!Array.isArray(currentRenewals)) currentRenewals = [];
+  const hideBoot = () => {
+    try {
+      const boot = document.getElementById("portal-boot");
+      if (boot) boot.style.display = "none";
+      window.__portalFirstRender = true;
+    } catch (_) {}
+  };
   const s = currentStudent;
   const portalSection = document.getElementById("page-student-portal");
   const initials = s.name ? s.name.substring(0, 2).toUpperCase() : "ST";
@@ -719,7 +762,19 @@ const renderPortal = () => {
       if (p.status === "approved" || p.status === "Completed") badgeClass = "badge-paid";
       if (p.status === "rejected") badgeClass = "badge-absent";
       const pDate = p.date ? new Date(p.date).toLocaleDateString() : "—";
-      const pPeriod = p.renewalPeriod != null && p.renewalPeriod !== "" ? `${p.renewalPeriod} Mo.` : (p.monthLabel || "—");
+      const monthsPart = (p.renewalMonths != null && p.renewalMonths !== "") ? Number(p.renewalMonths)
+        : (p.renewalPeriod != null && p.renewalPeriod !== "" ? Number(p.renewalPeriod) : 0);
+      const daysPart = Number(p.renewalDays) || 0;
+      let pPeriod = p.monthLabel || "—";
+      if (monthsPart || daysPart) {
+        const bits = [];
+        if (monthsPart) bits.push(`${monthsPart} Mo.`);
+        if (daysPart) bits.push(`${daysPart} Dy.`);
+        pPeriod = bits.join(" ");
+      } else if (p.renewalPeriod != null && p.renewalPeriod !== "") {
+        pPeriod = `${p.renewalPeriod} Mo.`;
+      }
+      if (p.source === "onboarding") pPeriod += ` · First`;
       const pTxn = p.transactionId || "—";
       const pStatus = String(p.status || "pending").toUpperCase();
       paymentsHtml += `<tr><td>${pDate}</td><td>${pPeriod}</td><td>₹${Number(p.amount) || 0}</td><td>${pTxn}</td><td><span class="badge ${badgeClass}">${pStatus}</span></td></tr>`;
@@ -780,25 +835,61 @@ const renderPortal = () => {
   // step persists to Firestore before advancing, so a half-finished applicant
   // resumes at the same step instead of starting over (and never duplicates).
   const onboardingState = resolvePortalState(s, s._documents || {}, planForRecord(s));
-  if (onboardingState !== STATE.DASHBOARD) {
+  // Manual step override (Back button): lets the student revisit an earlier
+  // wizard screen without changing Firestore. Cleared on every Next/save so
+  // the state machine stays the source of truth going forward.
+  const manualStep = window.__wizardManualStep || null;
+  const isWizardStep = (k) => k && [STATE.DETAILS, STATE.DOCUMENTS, STATE.PLAN, STATE.SEAT, STATE.PAYMENT].includes(k);
+  const effectiveState = (isWizardStep(manualStep) && onboardingState !== STATE.DASHBOARD && onboardingState !== STATE.PENDING && onboardingState !== STATE.REJECTED)
+    ? manualStep
+    : onboardingState;
+  if (effectiveState !== STATE.DASHBOARD) {
+    window.__onboardingActive = true;
     // Both of these run BEFORE renderOnboarding awaits the plan list: the
     // sidebar becomes an admission step rail (hiding the nav items used to
     // leave a blank slab) and the content area gets a themed skeleton. That is
     // what stops the finished dashboard flashing for a beat first.
-    paintWizardSidebar(onboardingState, s, s._documents || {}, planForRecord(s));
+    paintWizardSidebar(effectiveState, s, s._documents || {}, planForRecord(s));
+    // Force the portal tab active — the student must finish onboarding here.
+    try {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      portalSection.classList.add('active');
+      document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+    } catch (_) {}
     showWizardLoading(portalSection);
+    hideBoot();
+    const handleWizardAdvance = (target) => {
+      if (isWizardStep(target)) {
+        // Back/Next explicit jump: render that step immediately (no Firestore
+        // round-trip needed for Back). Next/save clears the override first.
+        const order = [STATE.DETAILS, STATE.DOCUMENTS, STATE.PLAN, STATE.SEAT, STATE.PAYMENT];
+        const curIdx = order.indexOf(effectiveState);
+        const tgtIdx = order.indexOf(target);
+        if (tgtIdx !== -1 && tgtIdx < curIdx) {
+          window.__wizardManualStep = target;
+          renderPortal();
+          return;
+        }
+        window.__wizardManualStep = null;
+      } else {
+        window.__wizardManualStep = null;
+      }
+      renderPortal();
+    };
     renderOnboarding({
       container: portalSection,
-      state: onboardingState,
+      state: effectiveState,
       student: s,
       documents: s._documents || {},
       plans: onboardingPlans,
       plan: planForRecord(s),
-      onAdvance: () => renderPortal()
+      onAdvance: handleWizardAdvance
     });
     return;
   }
   // Approved: put the real navigation back (it was swapped for the step rail).
+  window.__onboardingActive = false;
+  window.__wizardManualStep = null;
   restoreSidebar();
 
   { // ----- active student dashboard -----
@@ -965,6 +1056,7 @@ const renderPortal = () => {
     const dueLabel = s.paymentDueDate
       ? new Date(s.paymentDueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "N/A";
     const dueUrgent = daysRemaining <= 5;
+    const subscriptionLeft = formatSubscriptionLeft(daysRemaining);
 
     // Keep the app chrome honest for students: real name + photo, live
     // notification count, no admin search box.
@@ -1015,8 +1107,8 @@ const renderPortal = () => {
           <div class="metric-icon ${dueUrgent ? "red" : "teal"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg></div>
           <div>
             <div class="metric-label">Subscription</div>
-            <div class="metric-value" style="font-size:1.15rem; color:${dueUrgent ? "var(--danger)" : "inherit"};">${daysRemaining} days left</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">Due ${dueLabel}${pendingPayments.length ? ` · ${pendingPayments.length} payment${pendingPayments.length > 1 ? "s" : ""} pending` : " · all clear"}</div>
+            <div class="metric-value" style="font-size:1.15rem; color:${dueUrgent ? "var(--danger)" : "inherit"};">${subscriptionLeft}</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">Due ${dueLabel} · ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}${pendingPayments.length ? ` · ${pendingPayments.length} payment${pendingPayments.length > 1 ? "s" : ""} pending` : " · all clear"}</div>
           </div>
         </div>
       </div>
@@ -1309,6 +1401,9 @@ const renderPortal = () => {
   // Load the student's own documents (same record the admin panel shows).
   try { loadOwnDocuments(); } catch (e) { console.warn("[portal] own documents failed:", e); }
 
+  // Dashboard is fully painted — drop the boot cover so the real content shows.
+  hideBoot();
+
   setTimeout(() => { if (window.calculatePaymentAmount) window.calculatePaymentAmount(); }, 50);
 };
 
@@ -1363,4 +1458,17 @@ const calculateDaysRemaining = (dueDateStr) => {
   const diffTime = due - now;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays > 0 ? diffDays : 0;
+};
+
+// Real subscription text: "1 month left" / "15 days left" /
+// "1 month 15 days left". Pure display over the day count — the stored
+// paymentDueDate is untouched.
+const formatSubscriptionLeft = (totalDays) => {
+  const t = Math.max(0, Math.ceil(Number(totalDays) || 0));
+  if (t <= 0) return "Expired";
+  if (t < 30) return `${t} day${t === 1 ? "" : "s"} left`;
+  const months = Math.floor(t / 30);
+  const days = t % 30;
+  if (days === 0) return `${months} month${months === 1 ? "" : "s"} left`;
+  return `${months} month${months === 1 ? "" : "s"} ${days} day${days === 1 ? "" : "s"} left`;
 };

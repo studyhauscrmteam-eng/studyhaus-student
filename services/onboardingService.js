@@ -14,7 +14,8 @@
  * those are reserved for the admin (enforced by firestore.rules).
  */
 import {
-  doc, getDoc, setDoc, updateDoc, runTransaction, serverTimestamp, collection
+  doc, getDoc, setDoc, updateDoc, runTransaction, serverTimestamp, collection,
+  addDoc, query, where, getDocs
 } from "firebase/firestore";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword
@@ -648,6 +649,68 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         }
       }
     });
+
+    // Onboarding Paid must COUNT: create a real payments/pending doc reusing
+    // the same screenshot + txn, so it shows in history and the admin approves
+    // it like any renewal. Additive only — never modifies existing docs.
+    // Pay Later writes no payment doc (due banner covers it).
+    if (paymentMethod === "Paid" && transactionId && String(transactionId).trim() !== "") {
+      try {
+        const txnTrimmed = String(transactionId).trim();
+        // Idempotent: resubmits must not duplicate the payment row.
+        const dupQ = query(
+          collection(db, "payments"),
+          where("studentId", "==", studentId),
+          where("transactionId", "==", txnTrimmed)
+        );
+        const dupSnap = await getDocs(dupQ).catch(() => null);
+        const alreadyCounted = dupSnap && !dupSnap.empty;
+        if (!alreadyCounted) {
+          const freshSnap = await getDoc(doc(db, "students", studentId)).catch(() => null);
+          const fresh = freshSnap && freshSnap.exists() ? freshSnap.data() : {};
+          let planPrice = 0;
+          let renewalMonths = 1;
+          let renewalDays = 0;
+          try {
+            const { parsePlanDuration } = await import("./planDuration.js");
+            if (fresh.planId) {
+              const planSnap = await getDoc(doc(db, "membershipPlans", fresh.planId)).catch(() => null);
+              if (planSnap && planSnap.exists()) {
+                const plan = planSnap.data() || {};
+                if (Number(plan.price) > 0) planPrice = Number(plan.price);
+                const parsed = parsePlanDuration(plan.duration);
+                renewalMonths = parsed.months;
+                renewalDays = parsed.days;
+                if (renewalMonths <= 0 && renewalDays <= 0) { renewalMonths = 1; renewalDays = 0; }
+              }
+            }
+          } catch (_) { /* price/duration fallback below */ }
+          if (!(planPrice > 0) && Number(fresh.planPrice) > 0) planPrice = Number(fresh.planPrice);
+          await addDoc(collection(db, "payments"), {
+            studentId,
+            studentName: fresh.name || "",
+            planId: fresh.planId || "",
+            planName: fresh.planName || "",
+            amount: planPrice,
+            renewalPeriod: renewalMonths > 0 ? renewalMonths : 1,
+            renewalMonths,
+            renewalDays,
+            transactionId: txnTrimmed,
+            monthLabel: null,
+            dueDateStr: "",
+            paymentScreenshotUrl: paymentScreenshotUrl || fresh.paymentScreenshotUrl || "",
+            source: "onboarding",
+            status: "pending",
+            date: new Date().toISOString(),
+            createdAt: serverTimestamp()
+          });
+        }
+      } catch (payErr) {
+        // Never fail the application because the countable copy failed —
+        // the student doc + txn claim already succeeded above.
+        console.warn("[onboarding] countable payment copy skipped:", payErr && payErr.message ? payErr.message : payErr);
+      }
+    }
 
     return { success: true };
   } catch (e) {

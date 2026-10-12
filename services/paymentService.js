@@ -12,13 +12,21 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
       throw new Error("Transaction ID is required.");
     }
 
+    // Block reused UTRs before writing (same rule as onboarding claim).
+    try { await validateTransactionId(transactionId); } catch (dupErr) { throw dupErr; }
+
     const paymentData = {
       studentId: student.id,
       studentName: student.name,
+      planId: student.planId || "",
       planName: student.planName,
       amount: Number(amount),
-      renewalPeriod: Number(renewalMonths), // Months to add
+      renewalPeriod: Number(renewalMonths), // Months to add (kept for compat)
+      renewalMonths: Number(renewalMonths),
+      renewalDays: 0,
       transactionId: transactionId.trim(),
+      paymentScreenshotUrl: "",
+      source: "renewal",
       status: "pending", // "pending", "approved", "rejected"
       dueDateStr: student.paymentDueDate || "", // Reference for dashboard
       date: new Date().toISOString(),
@@ -111,20 +119,34 @@ export const approvePayment = async (paymentId, approverName) => {
     if (!studentSnap.exists()) throw new Error("Student not found");
     const studentData = studentSnap.data();
 
-    // Calculate new due date
-    let currentDue = new Date(studentData.paymentDueDate || new Date());
-    if (isNaN(currentDue.getTime())) currentDue = new Date();
-    
-    // Add the renewal months (day-safe: avoids Jan 31 + 1 month = Mar 3)
-    const renewalMonths = Number(paymentData.renewalPeriod);
-    currentDue.setDate(1); // Reset to 1st to avoid month-end overflow
-    currentDue.setMonth(currentDue.getMonth() + renewalMonths);
-    // Move to last day of that month if original was end-of-month
-    const lastDay = new Date(currentDue.getFullYear(), currentDue.getMonth() + 1, 0).getDate();
-    currentDue.setDate(Math.min(lastDay, currentDue.getDate()));
-    const newDueDateStr = currentDue.toISOString().split("T")[0];
+    // Calculate new due date: extend from the existing future due date,
+    // otherwise start from today (first payment / long-expired rejoin).
+    // Supports both month and day durations (e.g. 15-day plans).
+    let startDue = null;
+    try {
+      const parsed = new Date(studentData.paymentDueDate || "");
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const dueMid = new Date(parsed); dueMid.setHours(0, 0, 0, 0);
+      startDue = (!isNaN(dueMid.getTime()) && dueMid >= today) ? dueMid : today;
+    } catch (_) { startDue = new Date(); }
+    const renewalMonths = Number(paymentData.renewalMonths != null ? paymentData.renewalMonths : paymentData.renewalPeriod) || 0;
+    const renewalDays = Number(paymentData.renewalDays) || 0;
+    const fallbackMonths = (!renewalMonths && !renewalDays) ? (Number(paymentData.renewalPeriod) || 1) : 0;
+    let endDue = new Date(startDue);
+    try {
+      const { addDurationToDate } = await import("./planDuration.js");
+      endDue = addDurationToDate(startDue, renewalMonths + fallbackMonths, renewalDays);
+    } catch (_) {
+      endDue.setDate(1); // Reset to 1st to avoid month-end overflow
+      endDue.setMonth(endDue.getMonth() + (renewalMonths + fallbackMonths || 1));
+      const lastDay = new Date(endDue.getFullYear(), endDue.getMonth() + 1, 0).getDate();
+      endDue.setDate(Math.min(lastDay, endDue.getDate()));
+      if (renewalDays) endDue.setDate(endDue.getDate() + renewalDays);
+    }
+    const startStr = new Date(startDue).toISOString().split("T")[0];
+    const newDueDateStr = endDue.toISOString().split("T")[0];
 
-    // 1. Update Student Due Date
+    // 1. Update Student Due Date (additive — no other fields touched)
     await updateDoc(studentRef, {
       paymentDueDate: newDueDateStr,
       status: "Active",
@@ -137,6 +159,30 @@ export const approvePayment = async (paymentId, approverName) => {
       approvedBy: approverName,
       approvalDate: serverTimestamp()
     });
+
+    // 3. Mirror into renewals/ so Renewal History shows every approved
+    // payment (onboarding first payment + renewals), not just manual ones.
+    // Best-effort additive — approval already succeeded above.
+    try {
+      await addDoc(collection(db, "renewals"), {
+        studentId: paymentData.studentId,
+        studentName: paymentData.studentName || studentData.name || "",
+        oldPlan: studentData.planName || paymentData.planName || "",
+        newPlan: paymentData.planName || studentData.planName || "",
+        startDate: startStr,
+        endDate: newDueDateStr,
+        amount: Number(paymentData.amount) || 0,
+        paymentMethod: paymentData.paymentMethod || "Paid",
+        paymentId,
+        source: paymentData.source || "renewal",
+        renewedBy: approverName,
+        renewalNotes: "",
+        status: "Completed",
+        createdAt: serverTimestamp()
+      });
+    } catch (renewErr) {
+      console.warn("[payments] renewals mirror skipped:", renewErr && renewErr.message ? renewErr.message : renewErr);
+    }
     
     return { success: true };
   } catch (error) {

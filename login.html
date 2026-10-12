@@ -187,14 +187,28 @@
       background: none;
       border: none;
       cursor: pointer;
-      font-size: 15px;
       line-height: 1;
       color: #64748b;
-      padding: 2px;
+      padding: 4px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .pw-eye:hover {
       color: #0f172a;
+      background: #f1f5f9;
+    }
+
+    .pw-eye:focus-visible {
+      outline: 2px solid #059669;
+      outline-offset: 1px;
+    }
+
+    .pw-eye svg {
+      display: block;
+      pointer-events: none;
     }
 
     .btn-submit {
@@ -348,7 +362,7 @@
           <div class="pw-wrap">
             <input type="password" id="password" required placeholder="••••••••" autocomplete="current-password"
               autocapitalize="none" autocorrect="off" spellcheck="false" />
-            <button type="button" class="pw-eye" id="pw-eye" title="Show / hide password" aria-label="Show password">👁</button>
+            <button type="button" class="pw-eye" id="pw-eye" title="Show / hide password" aria-label="Show password" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <a class="forgot-link" href="/forgot-password.html">Forgot password?</a>
@@ -375,7 +389,7 @@
           <div class="pw-wrap">
             <input type="password" id="su-password" minlength="6"
               placeholder="At least 6 characters" autocomplete="new-password" />
-            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password">👁</button>
+            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
 
@@ -437,6 +451,53 @@
     };
     const hideError = () => { errorDiv.style.display = "none"; };
 
+    /* ── Login-ID check: 10-digit phone OR valid email ──────────────────
+       Runs BEFORE any Firebase call so typos never hit Auth. Signup
+       duplicate pre-check below is best-effort UX only — the authoritative
+       no-duplicate guard stays in completeSignup's transaction claims. */
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const normalizeIdDigits = (v) => String(v || "").replace(/\D/g, "");
+    const classifyLoginId = (raw) => {
+      const v = String(raw || "").trim();
+      if (!v) return { ok: false, kind: "empty", message: "Please enter your mobile number or email." };
+      if (!v.includes("@")) {
+        const digits = normalizeIdDigits(v);
+        // Strict 10 digits (allows +91/0 prefix forms that normalize to 10).
+        let norm = digits;
+        if (digits.length === 12 && digits.startsWith("91")) norm = digits.slice(2);
+        else if (digits.length === 11 && digits.startsWith("0")) norm = digits.slice(1);
+        if (norm.length !== 10 || !/^\d{10}$/.test(norm)) {
+          return { ok: false, kind: "phone", message: "Enter a valid 10-digit mobile number." };
+        }
+        return { ok: true, kind: "phone", phone: norm };
+      }
+      if (!EMAIL_RE.test(v)) {
+        return { ok: false, kind: "email", message: "Enter a valid email address." };
+      }
+      return { ok: true, kind: "email", email: v.toLowerCase() };
+    };
+
+    // Best-effort duplicate hint: if the uniqueness claim already exists,
+    // tell the user to sign in instead of creating a second ID. Failures
+    // (offline / permission) are ignored — completeSignup still enforces it.
+    const checkSignupNotDuplicate = async (classified) => {
+      try {
+        const { doc, getDoc } = await import("firebase/firestore");
+        const { db } = await import("./firebase/firebase.js");
+        let claimId = "";
+        if (classified.kind === "phone") claimId = "phone_" + classified.phone;
+        else if (classified.kind === "email") claimId = "email_" + classified.email;
+        if (!claimId) return null;
+        const snap = await getDoc(doc(db, "uniqueness", claimId));
+        if (snap.exists()) {
+          return classified.kind === "phone"
+            ? "This mobile number already has an account. Please sign in instead."
+            : "This email already has an account. Please sign in instead.";
+        }
+      } catch (_) { /* ignore — authoritative check runs in signup */ }
+      return null;
+    };
+
     /* ── Tab switching: one page, two modes ─────────────────────────── */
     const setTab = (mode, pushUrl = true) => {
       const isSignup = mode === "signup";
@@ -464,6 +525,8 @@
     tabSignup.addEventListener("click", () => setTab("signup"));
 
     /* ── Password eyes ──────────────────────────────────────────────── */
+    const EYE_SVG = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const EYE_OFF_SVG = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
     const bindEye = (btnId, inputId) => {
       const btn = $id(btnId);
       if (!btn) return;
@@ -472,7 +535,10 @@
         if (!pw) return;
         const wasHidden = pw.type === "password";
         pw.type = wasHidden ? "text" : "password";
-        btn.textContent = wasHidden ? "🙈" : "👁";
+        btn.innerHTML = wasHidden ? EYE_OFF_SVG : EYE_SVG;
+        btn.setAttribute("aria-label", wasHidden ? "Hide password" : "Show password");
+        btn.setAttribute("aria-pressed", wasHidden ? "true" : "false");
+        btn.title = wasHidden ? "Hide password" : "Show / hide password";
       });
     };
     bindEye("pw-eye", "password");
@@ -482,10 +548,15 @@
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       hideError();
-      loader.style.display = "flex";
 
       const identifier = $id("email").value.trim();
       const password = $id("password").value;
+
+      const checked = classifyLoginId(identifier);
+      if (!checked.ok) return showError(checked.message);
+      if (!password) return showError("Please enter your password.");
+
+      loader.style.display = "flex";
 
       try {
         // Signs in, resolves the role and redirects to the student dashboard.
@@ -509,14 +580,27 @@
 
       if (!name) return showError("Please enter your full name.");
       if (!identifier) return showError("Please enter your mobile number or email.");
+      const checked = classifyLoginId(identifier);
+      if (!checked.ok) return showError(checked.message);
       if (password.length < 6) return showError("Password must be at least 6 characters.");
       if (password !== confirm) return showError("Passwords do not match.");
 
       const btn = $id("btn-signup");
       const label = btn.textContent;
       btn.disabled = true;
-      btn.textContent = "Creating account…";
+      btn.textContent = "Checking…";
       loader.style.display = "flex";
+
+      // Friendly duplicate hint before creating anything (authoritative check
+      // still runs inside completeSignup — nothing here deletes or skips it).
+      const dupeHint = await checkSignupNotDuplicate(checked);
+      if (dupeHint) {
+        loader.style.display = "none";
+        btn.disabled = false;
+        btn.textContent = label;
+        return showError(dupeHint);
+      }
+      btn.textContent = "Creating account…";
 
       try {
         // Creates the Auth account first, then writes users/{uid} and
