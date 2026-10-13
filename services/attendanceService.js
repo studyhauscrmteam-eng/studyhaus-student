@@ -130,6 +130,7 @@ export const checkIn = async (student, selectedSeatNumber = null) => {
     const seatData = seatDoc.data();
 
     if (seatData.status === "Occupied") return { success: false, error: `Seat ${finalSeat} is already occupied. Please pick another seat.` };
+    if (seatData.status === "Pending") return { success: false, error: `Seat ${finalSeat} has a pending seat-change request. Please pick another seat.` };
     if (seatData.status === "Maintenance" || seatData.status === "Inactive") return { success: false, error: `Seat ${finalSeat} is under maintenance. Please pick another seat.` };
     // Reserved seats are freely pickable — first come, first served. The
     // assignment only decides which status the seat reverts to on check-out.

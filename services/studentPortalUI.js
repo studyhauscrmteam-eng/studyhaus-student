@@ -85,6 +85,7 @@ export const initStudentPortalUI = () => {
 
   unsubscribePortal = listenToStudentPortalData(async (studentData) => {
     currentStudent = studentData;
+    hydrateDismissedNotifs(studentData);
 
     // Listeners (each scoped to this student's own docs, so rules allow them).
     // Pass an error callback where supported so a denied read shows an empty
@@ -155,6 +156,34 @@ export const initStudentPortalUI = () => {
     try { const boot = document.getElementById("portal-boot"); if (boot) boot.style.display = "none"; } catch (_) {}
   });
 
+  // Shared check-in executor — used by the seat-picker modal AND the direct
+  // assigned-seat path. Manages the visible button and toasts.
+  const runCheckIn = async (selectedSeatNumber) => {
+    const modal = document.getElementById("checkin-seat-modal");
+    const btn = (modal && modal.open)
+      ? document.getElementById("btn-confirm-checkin")
+      : document.getElementById("btn-checkin");
+    const originalText = btn ? btn.innerHTML : "";
+    if (btn) { btn.innerHTML = "Processing..."; btn.disabled = true; }
+
+    try {
+      const res = await checkIn(currentStudent, selectedSeatNumber);
+      if (!res.success) {
+        window.showToast("Check-In Failed: " + res.error, "error");
+      } else if (res.warning) {
+        window.showToast("Checked in! " + res.warning, "warning");
+        if (modal && modal.open) modal.close();
+      } else {
+        window.showToast("Checked in successfully!", "success");
+        if (modal && modal.open) modal.close();
+      }
+    } catch (e) {
+      window.showToast("Check-In Failed: " + (e.message || e), "error");
+    } finally {
+      if (btn) { btn.innerHTML = originalText; btn.disabled = false; }
+    }
+  };
+
   window.handleCheckIn = async () => {
     if (!currentStudent) {
       window.showToast("Profile still loading. Please wait a moment and try again.", "warning");
@@ -164,8 +193,16 @@ export const initStudentPortalUI = () => {
       window.showToast("Membership is not active. Please clear dues or contact the desk.", "error");
       return;
     }
-    // Seat-first check-in: EVERY student picks the seat they will use —
-    // no auto check-in to an assigned seat, no plan-based shortcuts.
+    // Fixed-seat (preferred) plans check straight in to the assigned seat —
+    // the seat picker is only for non-preferred (open seating) plans, or a
+    // fixed-seat student the desk has not seated yet.
+    try {
+      const { planAllowsSeatSelection } = await import("./planValidation.js");
+      if (currentStudent.seatNumber && await planAllowsSeatSelection(currentStudent.planId)) {
+        await runCheckIn(null);
+        return;
+      }
+    } catch (_) { /* fall through to the seat picker */ }
     const modal = document.getElementById("checkin-seat-modal");
     if (!modal) {
       window.showToast("Check-in dialog not ready. Please refresh the page.", "error");
@@ -201,30 +238,11 @@ export const initStudentPortalUI = () => {
       return;
     }
     if (!currentStudent) {
-      window.showToast("Profile still loading. Please wait and try again.", "warning");
+      window.showToast("Profile still loading. Please wait a moment and try again.", "warning");
       return;
     }
 
-    const btn = document.getElementById("btn-confirm-checkin");
-    const originalText = btn ? btn.innerHTML : "";
-    if (btn) { btn.innerHTML = "Processing..."; btn.disabled = true; }
-
-    try {
-      const res = await checkIn(currentStudent, selectedSeatNumber);
-      if (!res.success) {
-        window.showToast("Check-In Failed: " + res.error, "error");
-      } else if (res.warning) {
-        window.showToast("Checked in! " + res.warning, "warning");
-        if (modal) modal.close();
-      } else {
-        window.showToast("Checked in successfully!", "success");
-        if (modal) modal.close();
-      }
-    } catch (e) {
-      window.showToast("Check-In Failed: " + (e.message || e), "error");
-    } finally {
-      if (btn) { btn.innerHTML = originalText; btn.disabled = false; }
-    }
+    await runCheckIn(selectedSeatNumber);
   };
 
   // Handle Check-out
@@ -612,6 +630,38 @@ const subscribeStudentAnnouncements = () => {
   }
 };
 
+// Dismissed notifications must survive logout/login and device changes: ids
+// live in localStorage for instant effect AND on the student's own doc
+// (students/{id}.dismissedNotifs — rules clause (b) allows self-writes), so
+// the next login re-hides them before the first render.
+const hydrateDismissedNotifs = (student) => {
+  try {
+    const ids = Array.isArray(student && student.dismissedNotifs) ? student.dismissedNotifs.map(String) : [];
+    if (!ids.length) return;
+    const key = `readNotifs_${localStorage.getItem("userId") || "anon"}`;
+    const cur = new Set(JSON.parse(localStorage.getItem(key) || "[]").map(String));
+    let changed = false;
+    ids.forEach((id) => { if (!cur.has(id)) { cur.add(id); changed = true; } });
+    if (changed) localStorage.setItem(key, JSON.stringify([...cur].slice(-300)));
+  } catch (_) {}
+};
+
+const persistDismissedNotif = async (id) => {
+  if (!currentStudent || !currentStudent.id || id == null) return;
+  try {
+    const sid = String(id);
+    const prev = Array.isArray(currentStudent.dismissedNotifs) ? currentStudent.dismissedNotifs.map(String) : [];
+    if (prev.includes(sid)) return;
+    const next = prev.length >= 280 ? [...prev.slice(-279), sid] : [...prev, sid];
+    const { doc: fsDoc, updateDoc: fsUpdate, serverTimestamp } = await import("firebase/firestore");
+    await fsUpdate(fsDoc(db, "students", currentStudent.id), {
+      dismissedNotifs: next,
+      updatedAt: serverTimestamp()
+    });
+    currentStudent.dismissedNotifs = next;
+  } catch (_) { /* localStorage copy still hides it on this device */ }
+};
+
 // One delegated click handler: clicking a notification marks it read so it
 // stays gone (persisted per student). Action buttons navigate instead.
 const wireStudentNotifDismiss = () => {
@@ -624,6 +674,7 @@ const wireStudentNotifDismiss = () => {
     if (!item) return;
     const { markNotifRead } = await import("./notificationReadState.js");
     markNotifRead(item.dataset.notifId);
+    persistDismissedNotif(item.dataset.notifId);
     if (!btn) renderStudentNotifications();
     // With a button: let its own onclick (navigate/checkout) run, then refresh.
     else setTimeout(() => { try { renderStudentNotifications(); } catch (_) {} }, 300);

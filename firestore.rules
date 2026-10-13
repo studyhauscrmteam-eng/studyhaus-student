@@ -198,12 +198,14 @@ service cloud.firestore {
         && request.resource.data.get('row', resource.data.get('row', 0)) == resource.data.get('row', 0)
         // Pre: a live seat (never Maintenance / Inactive) that is free, or is
         // already this student's own reservation.
-        && resource.data.get('status', 'Available') in ['Available', 'Reserved', 'Occupied']
+        && resource.data.get('status', 'Available') in ['Available', 'Reserved', 'Occupied', 'Pending']
         && holderFreeOrMine(resource.data.get('assignedStudentId', null))
-        && request.resource.data.status in ['Available', 'Reserved', 'Occupied']
-        // Post: they may only give it to themselves or leave it unheld.
+        && request.resource.data.status in ['Available', 'Reserved', 'Occupied', 'Pending']
+        // Post: they may only give it to themselves, leave it unheld, or park a
+        // seat as Pending while their seat-change request waits for the desk
+        // (a Pending seat is always held by the writer, so it is attributable).
         && holderFreeOrMine(request.resource.data.get('assignedStudentId', null))
-        && (request.resource.data.status == 'Available'
+        && (request.resource.data.status in ['Available', 'Pending']
             || request.resource.data.get('assignedStudentId', '') == request.auth.uid)
       );
     }

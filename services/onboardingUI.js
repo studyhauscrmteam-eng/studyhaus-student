@@ -689,7 +689,7 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       if (!seatNumber) return toast("Please select a seat from the map.", "warning");
 
       setBusy(true, "Reserving…");
-      const res = await reserveSeat(id, seatNumber, student.name || "");
+      const res = await reserveSeat(id, seatNumber, student.name || "", val("selectedSeatId"));
       setBusy(false);
       if (!res.success) return toast(res.error, "error");
 

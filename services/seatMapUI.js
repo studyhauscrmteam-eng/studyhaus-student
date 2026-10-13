@@ -55,12 +55,14 @@ const seatPalette = (status) => {
     if (status === "Occupied") return { bg: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" };
     if (status === "Reserved") return { bg: "#fffbeb", border: "1px solid #fde68a", color: "#92400e" };
     if (status === "Maintenance") return { bg: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af" };
+    if (status === "Pending") return { bg: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" };
     return { bg: "var(--bg-hover)", border: "1px dashed var(--border-bright)", color: "var(--text-muted)" };
   }
   if (status === "Available") return { bg: "rgba(34,197,94,0.14)", border: "1px solid rgba(34,197,94,0.45)", color: "#4ade80" };
   if (status === "Occupied") return { bg: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.45)", color: "#f87171" };
   if (status === "Reserved") return { bg: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.45)", color: "#fbbf24" };
   if (status === "Maintenance") return { bg: "rgba(59,130,246,0.16)", border: "1px solid rgba(59,130,246,0.5)", color: "#60a5fa" };
+  if (status === "Pending") return { bg: "rgba(99,102,241,0.16)", border: "1px solid rgba(99,102,241,0.45)", color: "#a5b4fc" };
   return { bg: "var(--bg-hover)", border: "1px dashed var(--border-bright)", color: "var(--text-muted)" };
 };
 

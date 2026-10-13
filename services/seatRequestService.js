@@ -1,4 +1,5 @@
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp, deleteDoc, doc, getDoc, getDocs } from "firebase/firestore";
+import { collection, addDoc, updateDoc, runTransaction, query, where, onSnapshot, serverTimestamp, deleteDoc, doc, getDoc, getDocs } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 import { db } from "../firebase/firebase.js";
 import { planAllowsSeatSelection } from "./planValidation.js";
 
@@ -20,6 +21,23 @@ export const stripSeatPlain = (v) => {
 };
 
 const maxForFloor = (floor) => (floor === "First Floor" ? FIRST_MAX : GROUND_MAX);
+
+/** Floor-aware seat lookup (plain numbers + legacy A/B docs). */
+const findSeatDoc = async (number, floor) => {
+  const plain = stripSeatPlain(number);
+  for (const key of [plain, `A${plain}`, `B${plain}`]) {
+    try {
+      const s = await getDocs(query(collection(db, "seats"), where("seatNumber", "==", key)));
+      for (const d of s.docs) {
+        const sd = d.data() || {};
+        if (stripSeatPlain(sd.seatNumber) === plain && (sd.floor || "Ground Floor") === floor) {
+          return { ref: d.ref, data: sd };
+        }
+      }
+    } catch (_) { /* try next key */ }
+  }
+  return null;
+};
 
 export const submitSeatChangeRequest = async (student, { toSeatNumber, toSeatFloor, reason }) => {
   try {
@@ -44,6 +62,7 @@ export const submitSeatChangeRequest = async (student, { toSeatNumber, toSeatFlo
     }
 
     // Target must be genuinely free right now (plain numbers + legacy A/B safe).
+    const myUid = (getAuth().currentUser || {}).uid || student.id;
     const seatsRef = collection(db, "seats");
     let match = null;
     for (const key of [toSeat, `A${toSeat}`, `B${toSeat}`]) {
@@ -64,6 +83,9 @@ export const submitSeatChangeRequest = async (student, { toSeatNumber, toSeatFlo
     if (match.data.status === "Reserved" && match.data.assignedStudentId && match.data.assignedStudentId !== student.id) {
       throw new Error(`Seat ${toSeat} is reserved for someone else. Pick another.`);
     }
+    if (match.data.status === "Pending" && match.data.assignedStudentId !== myUid) {
+      throw new Error(`Seat ${toSeat} has a pending seat-change request. Pick another.`);
+    }
 
     // One pending request at a time.
     try {
@@ -78,23 +100,65 @@ export const submitSeatChangeRequest = async (student, { toSeatNumber, toSeatFlo
       // Query failed (rules/index) — fall through; server rules still guard.
     }
 
-    await addDoc(collection(db, "seatRequests"), {
-      studentId: student.id,
-      studentName: student.name || "",
-      phone: student.phone || "",
-      planId: student.planId || "",
-      planName: student.planName || "",
-      fromSeat,
-      fromFloor,
-      toSeat,
-      toFloor,
-      reason: String(reason || "").trim().slice(0, 300),
-      status: "Pending",
-      decidedBy: "",
-      decidedAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    // Hold the seat as Pending while the desk decides (atomic Available ->
+    // Pending, so two students can never hold the same target). Released on
+    // cancel/reject; the desk's approval turns it into a Reserved seat.
+    try {
+      await runTransaction(db, async (tx) => {
+        const fresh = await tx.get(match.ref);
+        const sd = fresh.data() || {};
+        const heldByMe = sd.status === "Pending" && sd.assignedStudentId === myUid;
+        if (!heldByMe && sd.status !== "Available") {
+          throw new Error(`Seat ${toSeat} is no longer free. Pick another.`);
+        }
+        tx.update(match.ref, {
+          status: "Pending",
+          assignedStudentId: myUid,
+          assignedStudentName: student.name || "",
+          lastUpdated: serverTimestamp(),
+        });
+      });
+    } catch (e) {
+      if (e && /no longer free/.test(e.message)) throw e;
+      // Rules not yet published (or a transient failure) — file the request
+      // without the hold; the desk still sees it, and approve/reject/cancel
+      // release guards make the hold optional.
+      console.warn("[seatRequests] Pending hold skipped:", e && (e.message || e));
+    }
+
+    let requestCreated = false;
+    try {
+      await addDoc(collection(db, "seatRequests"), {
+        studentId: student.id,
+        studentName: student.name || "",
+        phone: student.phone || "",
+        planId: student.planId || "",
+        planName: student.planName || "",
+        fromSeat,
+        fromFloor,
+        toSeat,
+        toFloor,
+        reason: String(reason || "").trim().slice(0, 300),
+        status: "Pending",
+        decidedBy: "",
+        decidedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      requestCreated = true;
+    } finally {
+      if (!requestCreated) {
+        // Never leave an orphan hold: release the seat if the request failed.
+        try {
+          await updateDoc(match.ref, {
+            status: "Available",
+            assignedStudentId: null,
+            assignedStudentName: null,
+            lastUpdated: serverTimestamp(),
+          });
+        } catch (_) { /* best effort */ }
+      }
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
@@ -137,6 +201,19 @@ export const cancelSeatRequest = async (requestId, studentId) => {
     if (data.studentId !== studentId) throw new Error("Not your request.");
     if (data.status !== "Pending") throw new Error("Only waiting requests can be cancelled.");
     await deleteDoc(ref);
+    // Release the Pending hold this request placed on the target seat.
+    try {
+      const myUid = (getAuth().currentUser || {}).uid || studentId;
+      const target = await findSeatDoc(data.toSeat, data.toFloor || "Ground Floor");
+      if (target && target.data.status === "Pending" && target.data.assignedStudentId === myUid) {
+        await updateDoc(target.ref, {
+          status: "Available",
+          assignedStudentId: null,
+          assignedStudentName: null,
+          lastUpdated: serverTimestamp(),
+        });
+      }
+    } catch (_) { /* best effort — the desk can also free the seat by hand */ }
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

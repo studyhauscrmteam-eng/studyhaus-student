@@ -520,12 +520,38 @@ export const savePlan = async (studentId, plan) => {
 /**
  * Claim a seat atomically. Fails cleanly when somebody else took it first —
  * this is the single guarantee against two students holding one seat.
- * The seat doc id is the seat NUMBER (seats/A17).
+ * Seat doc ids are NOT the seat number (legacy "A17" ids, new "ground-17"
+ * ids, plain-number seatNumber fields), so the real doc is resolved first
+ * (by picked doc id, else by number) and the transaction runs on that ref.
  */
-export const reserveSeat = async (studentId, seatNumber, studentName) => {
+const stripSeatPlain = (v) => {
+  const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+  const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+  return m ? String(Number(m[1])) : raw;
+};
+
+const resolveSeatRef = async (seatNumber, seatId) => {
+  if (seatId) {
+    try {
+      const direct = await getDoc(doc(db, "seats", seatId));
+      if (direct.exists()) return direct.ref;
+    } catch (_) { /* fall through to number lookup */ }
+  }
+  const plain = stripSeatPlain(seatNumber);
+  for (const key of [plain, `A${plain}`, `B${plain}`]) {
+    const s = await getDocs(query(collection(db, "seats"), where("seatNumber", "==", key)));
+    for (const d of s.docs) {
+      if (stripSeatPlain((d.data() || {}).seatNumber) === plain) return d.ref;
+    }
+  }
+  return null;
+};
+
+export const reserveSeat = async (studentId, seatNumber, studentName, seatId) => {
   try {
+    const seatRef = await resolveSeatRef(seatNumber, seatId);
+    if (!seatRef) throw new Error("That seat no longer exists.");
     await runTransaction(db, async (tx) => {
-      const seatRef = doc(db, "seats", seatNumber);
       const seatSnap = await tx.get(seatRef);
       if (!seatSnap.exists()) throw new Error("That seat no longer exists.");
       const seat = seatSnap.data();
@@ -543,8 +569,9 @@ export const reserveSeat = async (studentId, seatNumber, studentName) => {
         lastUpdated: serverTimestamp()
       });
       tx.update(doc(db, "students", studentId), {
-        seatNumber,
-        seatId: seatNumber,
+        seatNumber: seat.seatNumber || seatNumber,
+        seatId: seatRef.id,
+        seatFloor: (seat.floor || "Ground Floor"),
         updatedAt: serverTimestamp()
       });
     });
@@ -558,20 +585,36 @@ export const reserveSeat = async (studentId, seatNumber, studentName) => {
 export const releaseSeat = async (seatNumber) => {
   if (!seatNumber) return { success: true };
   try {
+    const uid = getAuth().currentUser.uid;
+    // Resolve by holder first (exact), falling back to number lookup.
+    let refs = [];
+    try {
+      const held = await getDocs(query(collection(db, "seats"), where("assignedStudentId", "==", uid)));
+      const plain = stripSeatPlain(seatNumber);
+      refs = held.docs
+        .filter((d) => stripSeatPlain((d.data() || {}).seatNumber) === plain)
+        .map((d) => d.ref);
+      if (!refs.length && held.docs.length > 0) refs = [];
+    } catch (_) { /* fall through to number lookup */ }
+    if (!refs.length) {
+      const single = await resolveSeatRef(seatNumber, seatNumber);
+      if (single) refs = [single];
+    }
+    if (!refs.length) return { success: true };
     await runTransaction(db, async (tx) => {
-      const seatRef = doc(db, "seats", seatNumber);
-      const snap = await tx.get(seatRef);
-      if (!snap.exists()) return;
-      const seat = snap.data();
-      const uid = getAuth().currentUser.uid;
-      if (seat.status === "Occupied") return;          // already in use at the desk
-      if (seat.assignedStudentId && seat.assignedStudentId !== uid) return; // not ours
-      tx.update(seatRef, {
-        status: "Available",
-        assignedStudentId: "",
-        assignedStudentName: "",
-        lastUpdated: serverTimestamp()
-      });
+      for (const seatRef of refs) {
+        const snap = await tx.get(seatRef);
+        if (!snap.exists()) continue;
+        const seat = snap.data();
+        if (seat.status === "Occupied") continue;          // already in use at the desk
+        if (seat.assignedStudentId && seat.assignedStudentId !== uid) continue; // not ours
+        tx.update(seatRef, {
+          status: "Available",
+          assignedStudentId: "",
+          assignedStudentName: "",
+          lastUpdated: serverTimestamp()
+        });
+      }
     });
     return { success: true };
   } catch (e) {
