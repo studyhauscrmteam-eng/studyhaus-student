@@ -5,6 +5,7 @@ import { generateAttendancePDF } from "./pdfService.js";
 import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
 import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
+import { listenToMySeatRequests } from "./seatRequestService.js";
 import { getSettings } from "./settingsService.js";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
@@ -16,11 +17,16 @@ let currentAttendance = [];
 let currentPayments = [];
 let currentComplaints = [];
 let currentRenewals = [];
+let currentSeatRequests = [];
+// True when this student's plan includes a fixed seat (seatPreference) AND a
+// seat is assigned — the only case where "Change seat" is offered.
+let canChangeSeat = false;
 let unsubscribePortal = null;
 let unsubscribeAttendance = null;
 let unsubscribePayments = null;
 let unsubscribeComplaints = null;
 let unsubscribeRenewals = null;
+let unsubscribeSeatRequests = null;
 
 /** Plans are fetched once per page load; the wizard needs them to gate seats. */
 let onboardingPlans = [];
@@ -123,6 +129,22 @@ export const initStudentPortalUI = () => {
         });
       } catch (e) { console.warn("[portal] renewals listener:", e); currentRenewals = []; }
     }
+
+    if (!unsubscribeSeatRequests) {
+      try {
+        unsubscribeSeatRequests = listenToMySeatRequests(studentData.id, (records) => {
+          currentSeatRequests = records;
+          renderPortal();
+        });
+      } catch (e) { console.warn("[portal] seat requests listener:", e); currentSeatRequests = []; }
+    }
+
+    // Seat-change gate: fixed-seat plan + assigned seat. Checked live (not
+    // cached) so a plan change by the desk reflects on next snapshot.
+    try {
+      const { planAllowsSeatSelection } = await import("./planValidation.js");
+      canChangeSeat = !!(studentData.seatNumber && await planAllowsSeatSelection(studentData.planId));
+    } catch (_) { canChangeSeat = false; }
 
     // Desk announcements for the notifications bell (student-safe renderer).
     subscribeStudentAnnouncements();
@@ -354,6 +376,158 @@ window.calculatePaymentAmount = async () => {
 
     btn.innerHTML = "Submit Complaint";
     btn.disabled = false;
+  };
+
+  // ── Seat change (fixed-seat plans only) ──────────────────────────────
+  // The student sees free seats grouped by floor, picks one, and files a
+  // request. Staff approves from the admin Seats page. Statuses + cancel
+  // live on the "My Seat" dashboard card below.
+  let seatChangeFloor = "Ground Floor";
+  let seatChangeOptions = [];
+  let seatChangePicked = null;
+
+  const escSeat = (v) => String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+  const paintSeatChangeGrid = () => {
+    const grid = document.getElementById("seat-change-grid");
+    if (!grid) return;
+    const list = seatChangeOptions
+      .filter((o) => o.floor === seatChangeFloor)
+      .sort((a, b) => Number(a.num) - Number(b.num));
+    if (!list.length) {
+      grid.innerHTML = `<div style="text-align:center; padding:1.5rem; color:var(--text-muted); font-size:13px;">No free seats on this floor right now.</div>`;
+      return;
+    }
+    grid.innerHTML = list.map((o) => {
+      const sel = seatChangePicked && seatChangePicked.id === o.id;
+      return `<button type="button" onclick="window.pickSeatChange('${o.id}')"
+        style="border-radius:8px; height:46px; font-size:13px; font-weight:600; cursor:pointer; width:100%;
+        ${sel
+          ? "background:var(--primary); border:2px solid var(--primary); color:#fff;"
+          : "background:#f0fdf4; border:1px solid #bbf7d0; color:#166534;"}">${sel ? "✓ " : ""}${escSeat(o.num)}</button>`;
+    }).join("");
+    const label = document.getElementById("seat-change-picked-label");
+    if (label) {
+      label.innerHTML = seatChangePicked
+        ? `<span style="color:#166534; font-weight:600;">✓ Seat ${escSeat(seatChangePicked.num)} (${escSeat(seatChangePicked.floor)}) selected</span>`
+        : `<span style="color:var(--text-muted);">Tap a green seat number.</span>`;
+    }
+    document.querySelectorAll("[data-sc-floor]").forEach((b) => {
+      const on = b.getAttribute("data-sc-floor") === seatChangeFloor;
+      b.style.background = on ? "var(--bg-card)" : "transparent";
+      b.style.color = on ? "var(--text-primary)" : "var(--text-secondary)";
+    });
+  };
+
+  window._seatChangeFloor = (floor) => { seatChangeFloor = floor; paintSeatChangeGrid(); };
+  window.pickSeatChange = (id) => {
+    seatChangePicked = seatChangeOptions.find((o) => o.id === id) || null;
+    paintSeatChangeGrid();
+  };
+
+  window.openSeatChangeModal = async () => {
+    if (!currentStudent) { window.showToast("Profile still loading.", "warning"); return; }
+    if (!canChangeSeat) { window.showToast("Your plan does not include a fixed seat.", "warning"); return; }
+    let modal = document.getElementById("seat-change-modal");
+    if (!modal) {
+      modal = document.createElement("dialog");
+      modal.id = "seat-change-modal";
+      modal.className = "card";
+      modal.style.cssText = "border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background:var(--bg-card); color:var(--text-primary); width:min(640px, calc(100vw - 24px)); margin:auto;";
+      modal.innerHTML = `
+        <div style="padding:1.1rem 1.5rem; border-bottom:1px solid var(--borderBright); display:flex; justify-content:space-between; align-items:center;">
+          <div><h2 style="font-size:1.05rem; font-weight:600; margin:0;">Change your seat</h2>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Free seats only — the desk approves your pick.</div></div>
+          <button onclick="document.getElementById('seat-change-modal').close()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:var(--text-muted);">&times;</button>
+        </div>
+        <div style="padding:1.25rem 1.5rem;">
+          <div style="display:inline-flex; gap:0.5rem; background:var(--bg-hover); padding:4px; border-radius:999px; margin-bottom:1rem;">
+            <button data-sc-floor="Ground Floor" onclick="window._seatChangeFloor('Ground Floor')" style="border:none; padding:5px 14px; border-radius:999px; font-size:12px; cursor:pointer;">Ground Floor</button>
+            <button data-sc-floor="First Floor" onclick="window._seatChangeFloor('First Floor')" style="border:none; padding:5px 14px; border-radius:999px; font-size:12px; cursor:pointer;">First Floor</button>
+          </div>
+          <div id="seat-change-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); gap:0.6rem; max-height:300px; overflow-y:auto;"><div style="text-align:center; padding:1.5rem; color:var(--text-muted);">Loading free seats…</div></div>
+          <div id="seat-change-picked-label" style="margin-top:0.6rem; font-size:13px; min-height:20px;"></div>
+          <div class="form-group" style="margin-top:0.75rem;">
+            <label style="font-size:12px; color:var(--text-muted);">Reason (optional)</label>
+            <input type="text" id="seat-change-reason" class="input-field" placeholder="e.g. nearer the window" maxlength="300" style="width:100%; box-sizing:border-box;" />
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+            <button class="btn btn-ghost" onclick="document.getElementById('seat-change-modal').close()">Cancel</button>
+            <button class="btn btn-primary" id="btn-send-seat-change" onclick="window.sendSeatChange()">Send request</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+    }
+    seatChangePicked = null;
+    seatChangeOptions = [];
+    const reasonEl = document.getElementById("seat-change-reason");
+    if (reasonEl) reasonEl.value = "";
+    if (!modal.open) modal.showModal();
+    paintSeatChangeGrid();
+    try {
+      const q = query(collection(db, "seats"), where("status", "==", "Available"));
+      const snap = await getDocs(q);
+      const strip = (v) => {
+        const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+        const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+        return m ? String(Number(m[1])) : "";
+      };
+      const seen = new Set();
+      snap.forEach((d) => {
+        const sd = d.data() || {};
+        const num = strip(sd.seatNumber);
+        if (!num) return;
+        const floor = sd.floor || "Ground Floor";
+        const max = floor === "First Floor" ? 40 : 68;
+        if (!(Number(num) >= 1 && Number(num) <= max)) return;
+        const key = floor + "||" + num;
+        if (seen.has(key)) return;
+        seen.add(key);
+        seatChangeOptions.push({ id: d.id, num, floor });
+      });
+    } catch (e) {
+      const grid = document.getElementById("seat-change-grid");
+      if (grid) grid.innerHTML = `<div style="text-align:center; padding:1.5rem; color:#ef4444; font-size:13px;">Could not load seats: ${escSeat(e.message || e)}</div>`;
+      return;
+    }
+    if (modal.open) paintSeatChangeGrid();
+  };
+
+  window.sendSeatChange = async () => {
+    if (!seatChangePicked) { window.showToast("Pick a free seat first.", "warning"); return; }
+    const btn = document.getElementById("btn-send-seat-change");
+    const reason = (document.getElementById("seat-change-reason") || {}).value || "";
+    if (btn) { btn.disabled = true; btn.innerText = "Sending..."; }
+    try {
+      const { submitSeatChangeRequest } = await import("./seatRequestService.js");
+      const res = await submitSeatChangeRequest(currentStudent, {
+        toSeatNumber: seatChangePicked.num,
+        toSeatFloor: seatChangePicked.floor,
+        reason,
+      });
+      if (res.success) {
+        window.showToast("Seat-change request sent. The desk will approve it.", "success");
+        document.getElementById("seat-change-modal").close();
+      } else {
+        window.showToast("Failed: " + res.error, "error");
+      }
+    } catch (e) {
+      window.showToast("Failed: " + (e.message || e), "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerText = "Send request"; }
+    }
+  };
+
+  window.cancelSeatChange = async (id) => {
+    try {
+      const { cancelSeatRequest } = await import("./seatRequestService.js");
+      const res = await cancelSeatRequest(id, currentStudent && currentStudent.id);
+      if (!res.success) window.showToast("Failed: " + res.error, "error");
+    } catch (e) {
+      window.showToast("Failed: " + (e.message || e), "error");
+    }
   };
 };
 
@@ -715,6 +889,40 @@ window.refreshOwnDocuments = () => {
   if (el) delete el.dataset.loaded;
   docsLoadedFor = null;
   loadOwnDocuments();
+};
+
+/**
+ * "My Seat" dashboard card: current fixed seat + change button + request
+ * history (Pending with Cancel, Approved/Rejected as record). Rendered only
+ * for fixed-seat plans; others see nothing seat-related here.
+ */
+const seatRequestsCardHtml = (s) => {
+  const esc = (v) => String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const list = Array.isArray(currentSeatRequests) ? currentSeatRequests : [];
+  const pending = list.filter((r) => r.status === "Pending");
+  const rows = list.slice(0, 5).map((r) => {
+    const badge = r.status === "Approved" ? "badge-paid" : r.status === "Rejected" ? "badge-absent" : "badge-pending";
+    const cancel = r.status === "Pending"
+      ? ` <a href="#" onclick="window.cancelSeatChange('${r.id}'); return false;" style="color:var(--danger); font-size:11px;">Cancel</a>` : "";
+    const decided = r.status !== "Pending" && r.decidedAt
+      ? ` <span style="color:var(--text-muted); font-size:11px;">· decided${r.decisionReason ? `: ${esc(r.decisionReason)}` : ""}</span>` : "";
+    return `<div style="font-size:12.5px; color:var(--text-secondary); padding:6px 0; border-top:1px solid var(--border);">
+      Seat ${esc(r.fromSeat || "?")} → <strong style="color:var(--text-primary);">${esc(r.toSeat || "?")}</strong>
+      <span class="badge ${badge}" style="margin-left:6px;">${esc(r.status || "Pending")}</span>${decided}${cancel}</div>`;
+  }).join("");
+  return `
+    <div class="card" style="margin-top: 1.25rem;">
+      <div class="card-header"><h3>My Seat</h3>
+        ${canChangeSeat ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()">Change seat</button>` : ""}
+      </div>
+      <div style="font-size:13px; color:var(--text-secondary);">
+        ${s.seatNumber
+          ? `Your fixed seat: <strong style="color:var(--text-primary); font-size:1.1rem;">${esc(s.seatNumber)}</strong>${pending.length ? ` · <span style="color:var(--warning, #b45309);">${pending.length} change request${pending.length > 1 ? "s" : ""} waiting for approval</span>` : ""}`
+          : "No fixed seat on your plan."}
+      </div>
+      ${rows ? `<div style="margin-top:0.5rem;">${rows}</div>` : ""}
+    </div>`;
 };
 
 const renderPortal = () => {
@@ -1093,6 +1301,7 @@ const renderPortal = () => {
             <div class="metric-label">Right now</div>
             <div class="metric-value" style="font-size:1.15rem;">${activeSession ? "Checked in" : "Not checked in"}</div>
             <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: ${s.seatNumber}` : "Pick any free seat at check-in")}</div>
+            ${canChangeSeat ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="margin-top:6px; font-size:0.75rem;">Change seat</button>` : ""}
           </div>
         </div>
         <div class="metric-card" style="align-items: center;">
@@ -1141,6 +1350,8 @@ const renderPortal = () => {
         </div>
       </div>
       
+      ${seatRequestsCardHtml(s)}
+
       <div class="card" style="margin-top: 1.25rem;">
         <div class="card-header">
           <div>

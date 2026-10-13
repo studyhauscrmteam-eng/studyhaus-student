@@ -292,6 +292,22 @@ service cloud.firestore {
       allow update, delete: if isStaff();
     }
 
+    // ---------- seat change requests (student asks, staff approves) ----------
+    // Students file Pending requests for their own uid; only staff decide.
+    // A student may delete (cancel) their own still-Pending request.
+    match /seatRequests/{requestId} {
+      allow read: if isStaff() || (signedIn() && resource.data.get('studentId', '') == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.get('studentId', '') == request.auth.uid
+        && request.resource.data.get('fromSeat', '').size() > 0
+        && request.resource.data.get('toSeat', '').size() > 0
+        && request.resource.data.get('status', 'Pending') == 'Pending';
+      allow update: if isStaff();
+      allow delete: if isStaff() || (signedIn()
+        && resource.data.get('studentId', '') == request.auth.uid
+        && resource.data.get('status', '') == 'Pending');
+    }
+
     // ---------- renewals ----------
     match /renewals/{renewalId} {
       allow read: if isStaff() || isOwnDoc();
