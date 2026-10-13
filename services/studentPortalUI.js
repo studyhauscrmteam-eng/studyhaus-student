@@ -379,54 +379,10 @@ window.calculatePaymentAmount = async () => {
   };
 
   // ── Seat change (fixed-seat plans only) ──────────────────────────────
-  // The student sees free seats grouped by floor, picks one, and files a
-  // request. Staff approves from the admin Seats page. Statuses + cancel
-  // live on the "My Seat" dashboard card below.
-  let seatChangeFloor = "Ground Floor";
-  let seatChangeOptions = [];
-  let seatChangePicked = null;
-
-  const escSeat = (v) => String(v == null ? "" : v)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-  const paintSeatChangeGrid = () => {
-    const grid = document.getElementById("seat-change-grid");
-    if (!grid) return;
-    const list = seatChangeOptions
-      .filter((o) => o.floor === seatChangeFloor)
-      .sort((a, b) => Number(a.num) - Number(b.num));
-    if (!list.length) {
-      grid.innerHTML = `<div style="text-align:center; padding:1.5rem; color:var(--text-muted); font-size:13px;">No free seats on this floor right now.</div>`;
-      return;
-    }
-    grid.innerHTML = list.map((o) => {
-      const sel = seatChangePicked && seatChangePicked.id === o.id;
-      return `<button type="button" onclick="window.pickSeatChange('${o.id}')"
-        style="border-radius:8px; height:46px; font-size:13px; font-weight:600; cursor:pointer; width:100%;
-        ${sel
-          ? "background:var(--primary); border:2px solid var(--primary); color:#fff;"
-          : "background:#f0fdf4; border:1px solid #bbf7d0; color:#166534;"}">${sel ? "✓ " : ""}${escSeat(o.num)}</button>`;
-    }).join("");
-    const label = document.getElementById("seat-change-picked-label");
-    if (label) {
-      label.innerHTML = seatChangePicked
-        ? `<span style="color:#166534; font-weight:600;">✓ Seat ${escSeat(seatChangePicked.num)} (${escSeat(seatChangePicked.floor)}) selected</span>`
-        : `<span style="color:var(--text-muted);">Tap a green seat number.</span>`;
-    }
-    document.querySelectorAll("[data-sc-floor]").forEach((b) => {
-      const on = b.getAttribute("data-sc-floor") === seatChangeFloor;
-      b.style.background = on ? "var(--bg-card)" : "transparent";
-      b.style.color = on ? "var(--text-primary)" : "var(--text-secondary)";
-    });
-  };
-
-  window._seatChangeFloor = (floor) => { seatChangeFloor = floor; paintSeatChangeGrid(); };
-  window.pickSeatChange = (id) => {
-    seatChangePicked = seatChangeOptions.find((o) => o.id === id) || null;
-    paintSeatChangeGrid();
-  };
-
+  // Uses the ORIGINAL room-layout seat map (same picker as check-in):
+  // floor tabs, DOOR/TOILET room, green = Available. The student picks a
+  // free seat and files a request; staff approves from the admin Seats
+  // page. Statuses + cancel live on the "My Seat" dashboard card below.
   window.openSeatChangeModal = async () => {
     if (!currentStudent) { window.showToast("Profile still loading.", "warning"); return; }
     if (!canChangeSeat) { window.showToast("Your plan does not include a fixed seat.", "warning"); return; }
@@ -435,20 +391,18 @@ window.calculatePaymentAmount = async () => {
       modal = document.createElement("dialog");
       modal.id = "seat-change-modal";
       modal.className = "card";
-      modal.style.cssText = "border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background:var(--bg-card); color:var(--text-primary); width:min(640px, calc(100vw - 24px)); margin:auto;";
+      modal.style.cssText = "border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background:var(--bg-card); color:var(--text-primary); width:min(860px, calc(100vw - 24px)); max-width:860px; margin:auto;";
       modal.innerHTML = `
         <div style="padding:1.1rem 1.5rem; border-bottom:1px solid var(--borderBright); display:flex; justify-content:space-between; align-items:center;">
           <div><h2 style="font-size:1.05rem; font-weight:600; margin:0;">Change your seat</h2>
-          <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Free seats only — the desk approves your pick.</div></div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Tap any green (Available) seat — the desk approves your pick.</div></div>
           <button onclick="document.getElementById('seat-change-modal').close()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:var(--text-muted);">&times;</button>
         </div>
         <div style="padding:1.25rem 1.5rem;">
-          <div style="display:inline-flex; gap:0.5rem; background:var(--bg-hover); padding:4px; border-radius:999px; margin-bottom:1rem;">
-            <button data-sc-floor="Ground Floor" onclick="window._seatChangeFloor('Ground Floor')" style="border:none; padding:5px 14px; border-radius:999px; font-size:12px; cursor:pointer;">Ground Floor</button>
-            <button data-sc-floor="First Floor" onclick="window._seatChangeFloor('First Floor')" style="border:none; padding:5px 14px; border-radius:999px; font-size:12px; cursor:pointer;">First Floor</button>
-          </div>
-          <div id="seat-change-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); gap:0.6rem; max-height:300px; overflow-y:auto;"><div style="text-align:center; padding:1.5rem; color:var(--text-muted);">Loading free seats…</div></div>
-          <div id="seat-change-picked-label" style="margin-top:0.6rem; font-size:13px; min-height:20px;"></div>
+          <div id="seat-change-selection-section" style="border:1px solid var(--border-bright); border-radius:12px; padding:1rem;"></div>
+          <input type="hidden" id="selectedSeatNumber" />
+          <input type="hidden" id="selectedSeatId" />
+          <div id="signup-selected-label" style="margin-top:0.6rem; font-size:13px; color:var(--text-secondary); min-height:20px;"></div>
           <div class="form-group" style="margin-top:0.75rem;">
             <label style="font-size:12px; color:var(--text-muted);">Reason (optional)</label>
             <input type="text" id="seat-change-reason" class="input-field" placeholder="e.g. nearer the window" maxlength="300" style="width:100%; box-sizing:border-box;" />
@@ -460,56 +414,49 @@ window.calculatePaymentAmount = async () => {
         </div>`;
       document.body.appendChild(modal);
     }
-    seatChangePicked = null;
-    seatChangeOptions = [];
-    const reasonEl = document.getElementById("seat-change-reason");
+    // Clear previous selection (scoped to this modal — same ids as check-in,
+    // but _signupSelectSeat writes into the OPEN dialog).
+    modal.querySelector("#selectedSeatNumber").value = "";
+    modal.querySelector("#selectedSeatId").value = "";
+    modal.querySelector("#signup-selected-label").innerHTML = "";
+    const reasonEl = modal.querySelector("#seat-change-reason");
     if (reasonEl) reasonEl.value = "";
     if (!modal.open) modal.showModal();
-    paintSeatChangeGrid();
     try {
-      const q = query(collection(db, "seats"), where("status", "==", "Available"));
-      const snap = await getDocs(q);
-      const strip = (v) => {
-        const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
-        const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
-        return m ? String(Number(m[1])) : "";
-      };
-      const seen = new Set();
-      snap.forEach((d) => {
-        const sd = d.data() || {};
-        const num = strip(sd.seatNumber);
-        if (!num) return;
-        const floor = sd.floor || "Ground Floor";
-        const max = floor === "First Floor" ? 40 : 68;
-        if (!(Number(num) >= 1 && Number(num) <= max)) return;
-        const key = floor + "||" + num;
-        if (seen.has(key)) return;
-        seen.add(key);
-        seatChangeOptions.push({ id: d.id, num, floor });
-      });
+      const { initSeatMapUI } = await import("./seatMapUI.js");
+      // No checkin context: ONLY green (Available) seats are tappable.
+      await initSeatMapUI("signup", "seat-change-selection-section");
     } catch (e) {
-      const grid = document.getElementById("seat-change-grid");
-      if (grid) grid.innerHTML = `<div style="text-align:center; padding:1.5rem; color:#ef4444; font-size:13px;">Could not load seats: ${escSeat(e.message || e)}</div>`;
-      return;
+      console.warn("[portal] seat map failed:", e);
+      window.showToast("Could not load seat map: " + (e.message || e), "error");
     }
-    if (modal.open) paintSeatChangeGrid();
   };
 
   window.sendSeatChange = async () => {
-    if (!seatChangePicked) { window.showToast("Pick a free seat first.", "warning"); return; }
+    const modal = document.getElementById("seat-change-modal");
+    const getVal = (id) => (modal && modal.querySelector("#" + id)?.value) || "";
+    const pickedId = getVal("selectedSeatId");
+    const pickedNum = getVal("selectedSeatNumber");
+    if (!pickedId || !pickedNum) { window.showToast("Pick a free seat from the map first.", "warning"); return; }
     const btn = document.getElementById("btn-send-seat-change");
-    const reason = (document.getElementById("seat-change-reason") || {}).value || "";
+    const reason = (modal && modal.querySelector("#seat-change-reason")?.value) || "";
     if (btn) { btn.disabled = true; btn.innerText = "Sending..."; }
     try {
+      // Floor comes from the picked seat doc itself (duplicate plain numbers
+      // exist on both floors, so the number alone is ambiguous).
+      const { doc: fsDoc, getDoc: fsGet } = await import("firebase/firestore");
+      const seatSnap = await fsGet(fsDoc(db, "seats", pickedId));
+      if (!seatSnap.exists()) throw new Error("That seat is gone. Pick another.");
+      const seatData = seatSnap.data() || {};
       const { submitSeatChangeRequest } = await import("./seatRequestService.js");
       const res = await submitSeatChangeRequest(currentStudent, {
-        toSeatNumber: seatChangePicked.num,
-        toSeatFloor: seatChangePicked.floor,
+        toSeatNumber: seatData.seatNumber,
+        toSeatFloor: seatData.floor || "Ground Floor",
         reason,
       });
       if (res.success) {
         window.showToast("Seat-change request sent. The desk will approve it.", "success");
-        document.getElementById("seat-change-modal").close();
+        modal.close();
       } else {
         window.showToast("Failed: " + res.error, "error");
       }
