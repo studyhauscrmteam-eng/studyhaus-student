@@ -30,13 +30,6 @@ service cloud.firestore {
     function isOwnDoc() {
       return signedIn() && resource.data.get('studentId', null) == request.auth.uid;
     }
-    // Firestore limits a document to ~1MB. 4 image fields at this cap still fit.
-    function withinImageBudget() {
-      return request.resource.data.get('aadhaarFront', '').size() <= 240000
-        && request.resource.data.get('aadhaarBack', '').size() <= 240000
-        && request.resource.data.get('photo', '').size() <= 240000
-        && request.resource.data.get('paymentScreenshot', '').size() <= 240000;
-    }
     // On UPDATE only police images this write actually changes, so a legacy
     // document that predates the cap can still receive non-image edits.
     // NOTE: rules Sets expose hasOnly/hasAll/hasAny — there is no `has()`.
