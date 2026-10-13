@@ -43,7 +43,11 @@
       "Shell(node C:\\Users\\Asus\\AppData\\Local\\Temp\\commandcode\\D--code-BBAACCKKUUPP-studyhaus-student\\c334e3c3-2b94-47a3-9694-6330955e868c\\scratchpad\\checkin-test\\copy.cjs)",
       "Shell(node \"C:\\Users\\Asus\\AppData\\Local\\Temp\\commandcode\\D--code-BBAACCKKUUPP-studyhaus-student\\c334e3c3-2b94-47a3-9694-6330955e868c\\scratchpad\\checkin-test\\seat-flow.test.mjs\")",
       "Shell(node scripts/deploy-hosting.js --rules 2 >& 1)",
-      "Shell(node scripts/deploy-hosting.js --site studyhaus-crm-admin 2 >& 1)"
+      "Shell(node scripts/deploy-hosting.js --site studyhaus-crm-admin 2 >& 1)",
+      "Shell(node -e console.log('student rules chars:', require('fs').readFileSync('studyhaus-student/firestore.rules','utf8').length))",
+      "Shell(node -e  const fs=require('fs'); const live=fs.readFileSync('D:/code/LIB/New folder/Shreeji-Library/scripts/out/live-rules-2026-10-05.rules','utf8'); const cur=fs.readFileSync('studyhaus-student/firestore.rules','utf8'); const has=(t,s)=>t.includes(s); console.log('live chars:', live.length, '| current chars:', cur.length); console.log('live has seats Pending :', has(live,\"'Pending'\")); console.log('live has seatRequests block :', has(live,'match /seatRequests/')); console.log('live has attendance block :', has(live,'match /attendance/')); console.log('live has seats self-update :', has(live,'holderFreeOrMine')); console.log('identical? :', live.trim()===cur.trim()); )",
+      "Shell(node \"C:\\Users\\Asus\\AppData\\Local\\Temp\\commandcode\\D--code-BBAACCKKUUPP-studyhaus-student\\c334e3c3-2b94-47a3-9694-6330955e868c\\scratchpad\\rules-diff.cjs\")",
+      "Shell(node -e require('fs').copyFileSync('studyhaus-student/firestore.rules','D:/code/LIB/New folder/Shreeji-Library/firestore.rules'); console.log('copied'))"
     ],
     "deny": [],
     "defaultMode": "default"
