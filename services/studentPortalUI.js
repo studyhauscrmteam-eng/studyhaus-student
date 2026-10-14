@@ -3,6 +3,44 @@ import { listenToMyAttendance, checkIn, checkOut } from "./attendanceService.js"
 import { calculateStudyHours } from "./studyHourCalculator.js";
 import { generateAttendancePDF } from "./pdfService.js";
 import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
+
+// ── Payment screenshots: compress up to 4 images to ≤200k-char data-URLs ────
+// Same budget the rest of the app uses (Firestore 1MB doc limit headroom).
+const compressPaymentScreenshot = (file) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const MAX_DIM = 600;
+    let { width, height } = img;
+    if (width > height) { height = Math.round((height / width) * MAX_DIM); width = MAX_DIM; }
+    else { width = Math.round((width / height) * MAX_DIM); height = MAX_DIM; }
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+    let q = 0.6;
+    let dataUrl = canvas.toDataURL("image/jpeg", q);
+    while (dataUrl.length > 200000 && q > 0.2) {
+      q -= 0.1;
+      dataUrl = canvas.toDataURL("image/jpeg", q);
+    }
+    resolve(dataUrl);
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Not a readable image")); };
+  img.src = url;
+});
+
+const collectPaymentScreenshots = async () => {
+  const input = document.getElementById("payment-ss");
+  if (!input || !input.files || !input.files.length) return [];
+  const files = Array.from(input.files).slice(0, 4); // max 4 per payment
+  const out = [];
+  for (const f of files) {
+    try { out.push(await compressPaymentScreenshot(f)); }
+    catch (e) { console.warn("[payment-ss] skipped one screenshot:", e.message); }
+  }
+  return out;
+};
 import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
 import { listenToMySeatRequests } from "./seatRequestService.js";
@@ -363,10 +401,17 @@ window.calculatePaymentAmount = async () => {
     btn.innerHTML = "Submitting...";
     btn.disabled = true;
 
-    const res = await submitPaymentRequest(currentStudent, txnId, months, amount, monthLabel);
+    // Attach up to 4 payment screenshots (compressed) to THIS payment record.
+    let screenshots = [];
+    try { screenshots = await collectPaymentScreenshots(); }
+    catch (e) { console.warn("[payment-ss] compress failed:", e.message); }
+
+    const res = await submitPaymentRequest(currentStudent, txnId, months, amount, monthLabel, screenshots);
     if (res.success) {
       window.showToast(window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!", "success");
       document.getElementById("payment-txnid").value = "";
+      const ssInput = document.getElementById("payment-ss");
+      if (ssInput) ssInput.value = "";
     } else {
       window.showToast("Failed: " + res.error, "error");
     }
@@ -1489,6 +1534,10 @@ const renderPortal = () => {
                 <div class="form-group full-width">
                   <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">UPI Transaction ID *</label>
                   <input type="text" id="payment-txnid" required class="sp-input" placeholder="Enter your 12-digit UPI Txn ID" />
+                </div>
+                <div class="form-group full-width">
+                  <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">Payment Screenshot (Optional · up to 4)</label>
+                  <input type="file" id="payment-ss" accept="image/*" multiple class="sp-input" style="padding:8px;" />
                 </div>
                 <div class="form-group full-width sp-actions">
                   <button type="button" class="btn btn-ghost" title="Clear the transaction ID field" onclick="document.getElementById('payment-txnid').value=''">Clear</button>

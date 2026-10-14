@@ -6,7 +6,7 @@ import { validateTransactionId } from "./paymentValidation.js";
 // STUDENT PAYMENT ACTIONS
 // ===============================================
 
-export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null) => {
+export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null, screenshots = []) => {
   try {
     if (!transactionId || transactionId.trim() === "") {
       throw new Error("Transaction ID is required.");
@@ -35,6 +35,12 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
 
     // Store which specific month is being paid (for sequential overdue payments)
     if (monthLabel) paymentData.monthLabel = monthLabel; // e.g. "June 2026"
+
+    // Payment screenshots travel WITH the payment (up to 4 compressed images,
+    // each ≤200k chars — well under Firestore's 1MB doc limit). Every payment
+    // keeps its own screenshots forever; nothing is overwritten later.
+    const shots = (Array.isArray(screenshots) ? screenshots : []).filter(s => typeof s === "string" && s.startsWith("data:image/")).slice(0, 4);
+    if (shots.length) paymentData.screenshots = shots;
 
     await addDoc(collection(db, "payments"), paymentData);
     
