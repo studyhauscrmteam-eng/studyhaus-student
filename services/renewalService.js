@@ -46,13 +46,15 @@ export const processRenewal = async (data) => {
       transaction.set(renewalRef, {
         studentId: data.studentId,
         studentName: studentDoc.data().name,
-        oldPlan: data.oldPlanName,
-        newPlan: data.newPlanName,
+        oldPlan: data.oldPlanName || "",
+        newPlan: data.newPlanName || "",
         startDate: data.startDate,
         endDate: data.endDate,
+        durationDays: Number(data.durationDays || 30),
+        durationMode: data.durationMode || "monthly",
         amount: Number(data.amount),
         paymentMethod: data.paymentMethod,
-        renewedBy: data.renewedBy,
+        renewedBy: data.renewedBy || "Student Portal",
         renewalNotes: data.renewalNotes || "",
         status: "Completed",
         createdAt: serverTimestamp()
@@ -62,6 +64,8 @@ export const processRenewal = async (data) => {
       transaction.update(studentRef, {
         planId: data.newPlanId,
         planName: data.newPlanName,
+        startDate: data.startDate,
+        endDate: data.endDate,
         paymentDueDate: data.endDate, // The new due date is the end of this renewal period
         status: "Active", // Ensure they are active
         updatedAt: serverTimestamp()
@@ -77,8 +81,13 @@ export const processRenewal = async (data) => {
           amount: Number(data.amount),
           paymentMethod: data.paymentMethod,
           paymentDate: new Date().toISOString().split("T")[0],
-          status: "Completed", // Auto-completed because they paid during renewal
-          recordedBy: data.renewedBy,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          durationDays: Number(data.durationDays || 30),
+          durationMode: data.durationMode || "monthly",
+          source: "renewal",
+          status: "approved",
+          recordedBy: data.renewedBy || "Student Portal",
           createdAt: serverTimestamp()
         });
       }

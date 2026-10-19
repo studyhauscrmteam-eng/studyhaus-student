@@ -586,7 +586,7 @@ const DOC_TYPES = [
     // live selfie, so there is deliberately no camera / Take Selfie button.
     key: "paymentScreenshot",
     label: "Payment screenshot",
-    sub: "Upload screenshot file · no camera needed",
+    sub: "Upload screenshot file",
     accept: "image/*,.pdf",
     iconSvg: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 3h16v18l-3-2-2 2-3-2-3 2-2-2-3 2z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>`
   },

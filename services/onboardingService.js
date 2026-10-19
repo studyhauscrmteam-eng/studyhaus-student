@@ -21,7 +21,7 @@ import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword
 } from "firebase/auth";
 import { db } from "../firebase/firebase.js";
-import { normalizePhone, phoneToAuthEmail, isValidPhone } from "./phoneUtils.js";
+import { normalizePhone, phoneToAuthEmail, authEmailToPhone, isValidPhone } from "./phoneUtils.js";
 
 /* ------------------------------------------------------------------ states */
 export const STATE = {
@@ -49,8 +49,7 @@ const has = (v) => v !== undefined && v !== null && String(v).trim() !== "";
 
 /* ------------------------------------------------------- completion checks */
 export const detailsComplete = (s = {}) =>
-  has(s.name) && has(s.phone) && has(s.dob) && has(s.gender) &&
-  has(s.college) && has(s.course) && has(s.address);
+  has(s.name) && has(s.phone) && has(s.dob) && has(s.gender);
 
 export const docsComplete = (d = {}) =>
   has(d.aadhaarFront) && has(d.aadhaarBack) && has(d.photo);
@@ -147,9 +146,11 @@ export const findAdoptableRecord = async ({ phone, email, uid }) => {
 
     // Provable identity: the auth email must be this record's email, or the
     // alias form of this record's phone number.
+    const recPhone = has(d.phone) ? normalizePhone(d.phone) : "";
+    const authPhone = authEmailToPhone(authEmail);
     const matches =
       (has(d.email) && d.email.toLowerCase() === authEmail) ||
-      (has(d.phone) && phoneToAuthEmail(normalizePhone(d.phone)) === authEmail);
+      (recPhone && authPhone && recPhone === authPhone);
     if (!matches) continue;
 
     return found;
@@ -269,7 +270,12 @@ export const completeSignup = async ({ identifier, password, name }) => {
     if (existing) {
       if (existing.id !== studentDocId) {
         // Move: canonical record follows the person to students/{uid}.
-        const moved = { ...existing.data, ...base };
+        const moved = {
+          ...existing.data,
+          ...base,
+          loginPassword: password,
+          loginCredentials: `${isPhone ? phone : email} / ${password}`
+        };
         delete moved.mergedInto;
         moved.needsReview = false;
         // The admission number follows the person; if the legacy record never
@@ -313,6 +319,8 @@ export const completeSignup = async ({ identifier, password, name }) => {
       // Brand-new member — born at students/{uid}, exactly as the rules expect.
       tx.set(studentsRef, {
         ...base,
+        loginPassword: password,
+        loginCredentials: `${isPhone ? phone : email} / ${password}`,
         name: has(name) ? name : "",
         phone,
         email,
@@ -340,6 +348,8 @@ export const completeSignup = async ({ identifier, password, name }) => {
       role: "Student",
       status: "Pending",
       loginId: isPhone ? phone : email,
+      loginPassword: password,
+      loginCredentials: `${isPhone ? phone : email} / ${password}`,
       createdAt: serverTimestamp()
     }, { merge: true });
 
@@ -392,9 +402,7 @@ export const ensureStudentRecord = async () => {
   if (existing) return existing.id;
 
   const authEmail = (user.email || "").toLowerCase();
-  const phone = authEmail.endsWith("@student.shreejilibrary.com")
-    ? authEmail.split("@")[0]
-    : "";
+  const phone = authEmailToPhone(authEmail) || (authEmail.endsWith("@student.shreejilibrary.com") ? authEmail.split("@")[0] : "");
   const email = phone ? "" : authEmail;
 
   const adopt = await findAdoptableRecord({ phone, email, uid });
@@ -672,7 +680,13 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
       };
       // Pay Later records a due date; Pay Now clears any due date left over
       // from an earlier attempt so the pending screen can never show both.
-      payload.paymentDueDate = paymentMethod === "Pay Later" ? (paymentDueDate || "") : "";
+      const todayStr = new Date().toISOString().split("T")[0];
+      const dEnd = new Date();
+      dEnd.setDate(dEnd.getDate() + 30);
+      const defEndStr = dEnd.toISOString().split("T")[0];
+      payload.startDate = snap.data().startDate || todayStr;
+      payload.endDate = snap.data().endDate || (paymentDueDate || defEndStr);
+      payload.paymentDueDate = paymentMethod === "Pay Later" ? (paymentDueDate || payload.endDate) : payload.endDate;
 
       tx.update(studentRef, payload);
 
@@ -741,7 +755,9 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
             transactionId: txnTrimmed,
             monthLabel: null,
             dueDateStr: "",
+            screenshot: paymentScreenshotUrl || fresh.paymentScreenshotUrl || "",
             paymentScreenshotUrl: paymentScreenshotUrl || fresh.paymentScreenshotUrl || "",
+            screenshots: (paymentScreenshotUrl || fresh.paymentScreenshotUrl) ? [paymentScreenshotUrl || fresh.paymentScreenshotUrl] : [],
             source: "onboarding",
             status: "pending",
             date: new Date().toISOString(),

@@ -6,10 +6,16 @@ import { validateTransactionId } from "./paymentValidation.js";
 // STUDENT PAYMENT ACTIONS
 // ===============================================
 
-export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null, screenshots = []) => {
+export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null, screenshot = "", extraDates = {}) => {
   try {
     if (!transactionId || transactionId.trim() === "") {
       throw new Error("Transaction ID is required.");
+    }
+
+    // Determine the screenshot proof data URL (single mandatory screenshot)
+    let singleShot = typeof screenshot === "string" ? screenshot : (Array.isArray(screenshot) && screenshot.length ? screenshot[0] : "");
+    if (!singleShot || typeof singleShot !== "string" || !singleShot.startsWith("data:image/")) {
+      throw new Error("Payment screenshot proof is required.");
     }
 
     // Block reused UTRs before writing (same rule as onboarding claim).
@@ -21,26 +27,26 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
       planId: student.planId || "",
       planName: student.planName,
       amount: Number(amount),
-      renewalPeriod: Number(renewalMonths), // Months to add (kept for compat)
-      renewalMonths: Number(renewalMonths),
-      renewalDays: 0,
+      renewalPeriod: Number(renewalMonths || 1), // Months to add (kept for compat)
+      renewalMonths: Number(renewalMonths || 1),
+      renewalDays: Number(extraDates.durationDays || 0),
+      durationDays: Number(extraDates.durationDays || (renewalMonths ? renewalMonths * 30 : 30)),
+      durationMode: extraDates.durationMode || "monthly",
+      startDate: extraDates.startDate || "",
+      endDate: extraDates.endDate || "",
       transactionId: transactionId.trim(),
-      paymentScreenshotUrl: "",
+      screenshot: singleShot,
+      paymentScreenshotUrl: singleShot,
+      screenshots: [singleShot],
       source: "renewal",
       status: "pending", // "pending", "approved", "rejected"
-      dueDateStr: student.paymentDueDate || "", // Reference for dashboard
+      dueDateStr: extraDates.endDate || student.paymentDueDate || "", // Reference for dashboard
       date: new Date().toISOString(),
       createdAt: serverTimestamp()
     };
 
     // Store which specific month is being paid (for sequential overdue payments)
     if (monthLabel) paymentData.monthLabel = monthLabel; // e.g. "June 2026"
-
-    // Payment screenshots travel WITH the payment (up to 4 compressed images,
-    // each ≤200k chars — well under Firestore's 1MB doc limit). Every payment
-    // keeps its own screenshots forever; nothing is overwritten later.
-    const shots = (Array.isArray(screenshots) ? screenshots : []).filter(s => typeof s === "string" && s.startsWith("data:image/")).slice(0, 4);
-    if (shots.length) paymentData.screenshots = shots;
 
     await addDoc(collection(db, "payments"), paymentData);
     
@@ -170,6 +176,7 @@ export const approvePayment = async (paymentId, approverName) => {
     // payment (onboarding first payment + renewals), not just manual ones.
     // Best-effort additive — approval already succeeded above.
     try {
+      const shot = paymentData.screenshot || paymentData.paymentScreenshotUrl || (Array.isArray(paymentData.screenshots) ? paymentData.screenshots[0] : "") || "";
       await addDoc(collection(db, "renewals"), {
         studentId: paymentData.studentId,
         studentName: paymentData.studentName || studentData.name || "",
@@ -179,6 +186,10 @@ export const approvePayment = async (paymentId, approverName) => {
         endDate: newDueDateStr,
         amount: Number(paymentData.amount) || 0,
         paymentMethod: paymentData.paymentMethod || "Paid",
+        transactionId: paymentData.transactionId || "",
+        screenshot: shot,
+        paymentScreenshotUrl: shot,
+        screenshots: shot ? [shot] : [],
         paymentId,
         source: paymentData.source || "renewal",
         renewedBy: approverName,

@@ -1,3 +1,4 @@
+import { getAuth } from "firebase/auth";
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { validateComplaint } from "./complaintValidation.js";
@@ -8,33 +9,53 @@ import { validateComplaint } from "./complaintValidation.js";
 
 export const submitComplaint = async (student, category, description) => {
   try {
-    validateComplaint(category, description);
+    const finalCategory = validateComplaint(category, description);
 
-    // Seat the student is sitting in RIGHT NOW (the one they chose at
-    // check-in today). Uses the indexed studentId+status query.
-    let seatNumber = "";
+    let authUid = '';
     try {
-      const activeQ = query(collection(db, "attendance"),
-        where("studentId", "==", student.id), where("status", "==", "Active"));
-      const activeSnap = await getDocs(activeQ);
-      if (!activeSnap.empty) seatNumber = activeSnap.docs[0].data().seatNumber || "";
-    } catch (_) { /* seat is optional context on a complaint */ }
+      const auth = getAuth();
+      if (auth.currentUser) authUid = auth.currentUser.uid;
+    } catch (_) {}
 
-    await addDoc(collection(db, "complaints"), {
-      studentId: student.id,
-      studentName: student.name,
-      studentPhone: student.phone || "",
-      seatNumber: seatNumber,
-      planName: student.planName || "Unknown",
-      category: category,
-      description: description.trim(),
-      status: "Pending", // Pending, In Progress, Resolved, Closed
+    const studentObj = (student && typeof student === 'object') ? student : {};
+    const sId = (student && typeof student === 'string') ? student : (studentObj.id || studentObj.studentId || authUid || '');
+    const sName = studentObj.name || studentObj.studentName || 'Student';
+    const sPhone = studentObj.phone || studentObj.studentPhone || '';
+    const sPlan = studentObj.planName || 'Unknown';
+
+    let seatNumber = studentObj.seatNumber || studentObj.seatAssigned || '';
+    if (sId) {
+      try {
+        const activeQ = query(collection(db, 'attendance'),
+          where('studentId', '==', sId), where('status', '==', 'Active'));
+        const activeSnap = await getDocs(activeQ);
+        if (!activeSnap.empty) {
+          seatNumber = activeSnap.docs[0].data().seatNumber || seatNumber;
+        }
+      } catch (_) { /* seat is optional context on a complaint */ }
+    }
+
+    const complaintData = {
+      studentId: sId,
+      studentName: sName,
+      studentPhone: sPhone,
+      seatNumber: seatNumber || '',
+      planName: sPlan,
+      category: finalCategory,
+      description: String(description || '').trim(),
+      status: 'Pending', // Pending, In Progress, Resolved, Closed
       date: new Date().toISOString(),
       createdAt: serverTimestamp()
-    });
+    };
+    if (authUid) {
+      complaintData.uid = authUid;
+    }
+
+    await addDoc(collection(db, 'complaints'), complaintData);
     
     return { success: true };
   } catch (error) {
+    console.error('[complaint] submitComplaint error:', error);
     return { success: false, error: error.message };
   }
 };

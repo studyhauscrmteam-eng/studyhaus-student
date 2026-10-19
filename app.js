@@ -85,19 +85,45 @@ function navigate(page) {
     window.__renderAnalytics();
   }
 
-  // On mobile, close sidebar after navigation
+  // On mobile, close sidebar & backdrop after navigation
   if (window.innerWidth <= 768) {
-    document.getElementById('sidebar').classList.remove('mobile-open');
+    document.getElementById('sidebar')?.classList.remove('mobile-open');
+    document.getElementById('sidebar-backdrop')?.classList.remove('active');
+    document.body.style.overflow = '';
   }
+
+  // Update mobile bottom nav active state
+  document.querySelectorAll('.mob-nav-item').forEach(item => {
+    item.classList.remove('active');
+    if (item.getAttribute('data-page') === page) {
+      item.classList.add('active');
+    }
+  });
+
+  // Scroll to top of page content on mobile
+  const contentEl = document.getElementById('page-content');
+  if (contentEl) contentEl.scrollTop = 0;
 }
 
 // ==================== SIDEBAR TOGGLE ====================
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
   if (window.innerWidth <= 768) {
-    sidebar.classList.toggle('mobile-open');
+    if (sidebar) {
+      const isOpen = sidebar.classList.toggle('mobile-open');
+      if (backdrop) {
+        if (isOpen) {
+          backdrop.classList.add('active');
+          document.body.style.overflow = 'hidden';
+        } else {
+          backdrop.classList.remove('active');
+          document.body.style.overflow = '';
+        }
+      }
+    }
   } else {
-    sidebar.classList.toggle('collapsed');
+    if (sidebar) sidebar.classList.toggle('collapsed');
   }
 }
 
@@ -579,7 +605,17 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest?.('.lang-dropdown')) {
     document.getElementById('lang-dropdown')?.classList.remove('open');
   }
+  if (!e.target.closest?.('.topbar-user')) {
+    document.querySelector('.topbar-user')?.classList.remove('open');
+  }
 });
+
+// ==================== TOPBAR USER MENU ====================
+function toggleUserMenu(e) {
+  if (e) e.stopPropagation();
+  document.querySelector('.topbar-user')?.classList.toggle('open');
+}
+window.toggleUserMenu = toggleUserMenu;
 
 // ==================== COLLAPSED SIDEBAR TOOLTIPS ====================
 // Copies each nav item's text label into data-tip so the icon-only

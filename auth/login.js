@@ -45,7 +45,20 @@ const resolveUserRole = async (user) => {
     // 2. Fallback for accounts that only have a credential stub.
     if (!userDoc) {
       try {
-        userDoc = await retryWithBackoff(() => getDocument("users", user.uid));
+        const uDoc = await retryWithBackoff(() => getDocument("users", user.uid));
+        if (uDoc) {
+          if (uDoc.studentId) {
+            const sDoc = await retryWithBackoff(() => getDocument("students", uDoc.studentId));
+            if (sDoc) {
+              userDoc = sDoc;
+              docId = uDoc.studentId;
+            } else {
+              userDoc = uDoc;
+            }
+          } else {
+            userDoc = uDoc;
+          }
+        }
       } catch (_) { /* ignore permission errors */ }
     }
 

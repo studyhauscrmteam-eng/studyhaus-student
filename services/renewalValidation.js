@@ -12,8 +12,8 @@ export const validateRenewal = (data) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   
-  if (start >= end) {
-    throw new Error("End Date must be after the Start Date.");
+  if (start > end) {
+    throw new Error("End Date cannot be earlier than the Start Date.");
   }
   
   if (!paymentMethod) {

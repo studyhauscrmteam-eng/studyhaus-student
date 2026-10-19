@@ -4,8 +4,8 @@ import { calculateStudyHours } from "./studyHourCalculator.js";
 import { generateAttendancePDF } from "./pdfService.js";
 import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
 
-// ── Payment screenshots: compress up to 4 images to ≤200k-char data-URLs ────
-// Same budget the rest of the app uses (Firestore 1MB doc limit headroom).
+// ── Payment screenshot: compress single proof image to ≤200k-char data-URL ────
+// Mandatory proof for payments — exactly 1 screenshot per payment.
 const compressPaymentScreenshot = (file) => new Promise((resolve, reject) => {
   const img = new Image();
   const url = URL.createObjectURL(file);
@@ -30,22 +30,56 @@ const compressPaymentScreenshot = (file) => new Promise((resolve, reject) => {
   img.src = url;
 });
 
-const collectPaymentScreenshots = async () => {
+const collectPaymentScreenshot = async () => {
   const input = document.getElementById("payment-ss");
-  if (!input || !input.files || !input.files.length) return [];
-  const files = Array.from(input.files).slice(0, 4); // max 4 per payment
-  const out = [];
-  for (const f of files) {
-    try { out.push(await compressPaymentScreenshot(f)); }
-    catch (e) { console.warn("[payment-ss] skipped one screenshot:", e.message); }
+  if (!input || !input.files || !input.files.length || !input.files[0]) {
+    throw new Error("Payment screenshot proof is required.");
   }
-  return out;
+  const f = input.files[0];
+  if (!f.type.startsWith("image/")) {
+    throw new Error("Payment screenshot must be an image file (JPG or PNG).");
+  }
+  return await compressPaymentScreenshot(f);
+};
+
+// Global proof preview modal for student portal
+window.viewStudentProofModal = (dataUrl, title = "Payment Screenshot Proof") => {
+  const isValidImage = (u) => typeof u === "string" && (u.startsWith("data:image/") || u.startsWith("http://") || u.startsWith("https://") || u.startsWith("blob:"));
+  if (!isValidImage(dataUrl)) {
+    if (window.showToast) window.showToast("No valid screenshot proof attached.", "warning");
+    return;
+  }
+  const old = document.getElementById("student-proof-modal");
+  if (old) old.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.id = "student-proof-modal";
+  dialog.className = "card smooth-modal";
+  dialog.style.cssText = "border:none; border-radius:14px; padding:0; box-shadow:0 18px 45px rgba(0,0,0,0.5); background:var(--bg-card); color:var(--text-primary); width:min(560px, 94vw); margin:auto;";
+  dialog.innerHTML = `
+    <div style="padding:1.25rem 1.5rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.75rem;">
+        <h3 style="margin:0; font-size:1.05rem; font-weight:700;">${title}</h3>
+        <button class="btn btn-ghost" id="spm-close" style="padding:0.25rem 0.5rem; font-size:1.1rem; line-height:1; cursor:pointer;">✕</button>
+      </div>
+      <div style="text-align:center; background:var(--bg-hover); border-radius:10px; overflow:hidden; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; min-height:220px; max-height:65vh; padding:10px;">
+        <img src="${dataUrl}" alt="Proof" onerror="this.onerror=null; this.parentElement.innerHTML='<div style=\\'padding:2.5rem; color:var(--text-muted); font-size:13px; text-align:center;\\'>⚠️ Screenshot proof could not be loaded</div>';" style="width:100%; height:auto; max-height:65vh; object-fit:contain; display:block; border-radius:8px;" />
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+        <a class="btn btn-primary" download="payment-proof.jpg" href="${dataUrl}" style="text-decoration:none; padding:7px 16px; font-size:13px;">Download Proof</a>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("#spm-close").onclick = () => dialog.close();
+  dialog.addEventListener("close", () => dialog.remove());
+  dialog.showModal();
 };
 import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
 import { listenToMySeatRequests } from "./seatRequestService.js";
 import { getSettings } from "./settingsService.js";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where, addDoc, setDoc, deleteDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import { STATE, resolvePortalState } from "./onboardingService.js";
 import { renderOnboarding, showWizardLoading, paintWizardSidebar, restoreSidebar } from "./onboardingUI.js";
@@ -122,6 +156,14 @@ export const initStudentPortalUI = () => {
       .catch((e) => console.warn("[portal] plans:", e));
 
   unsubscribePortal = listenToStudentPortalData(async (studentData) => {
+    if (!studentData._documents || !studentData._documents.paymentScreenshot) {
+      try {
+        const docSnap = await getDoc(doc(db, "studentDocuments", studentData.id));
+        if (docSnap.exists()) {
+          studentData._documents = { ...(studentData._documents || {}), ...docSnap.data() };
+        }
+      } catch (_) {}
+    }
     currentStudent = studentData;
     hydrateDismissedNotifs(studentData);
 
@@ -356,69 +398,186 @@ async function getPlanPrice(planName) {
   return fallbackPrice;
 }
 
+const addDaysToStr = (dateStr, days) => {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + Number(days));
+  return d.toISOString().split("T")[0];
+};
+
+const fmtDispDate = (dateStr) => {
+  if (!dateStr) return "—";
+  const [y, m, d] = String(dateStr).split("T")[0].split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+};
+
+window.onStudentRenewalModeChange = () => {
+  const modeSelect = document.getElementById("student-duration-mode");
+  const valWrap = document.getElementById("student-duration-val-wrap");
+  const valInput = document.getElementById("student-duration-val");
+  const unitSpan = document.getElementById("student-duration-unit");
+  const autoBadge = document.getElementById("student-auto-badge");
+  if (!modeSelect) return;
+
+  const mode = modeSelect.value;
+  if (mode === "monthly") {
+    if (valWrap) valWrap.style.display = "flex";
+    if (valInput) valInput.value = valInput.value > 0 ? valInput.value : 1;
+    if (unitSpan) unitSpan.textContent = "month";
+    if (autoBadge) { autoBadge.textContent = "AUTO"; autoBadge.style.color = "#16a34a"; }
+  } else if (mode === "days") {
+    if (valWrap) valWrap.style.display = "flex";
+    if (valInput) valInput.value = valInput.value > 1 ? valInput.value : 30;
+    if (unitSpan) unitSpan.textContent = "days";
+    if (autoBadge) { autoBadge.textContent = "AUTO"; autoBadge.style.color = "#16a34a"; }
+  } else if (mode === "custom") {
+    if (valWrap) valWrap.style.display = "none";
+    if (autoBadge) { autoBadge.textContent = "CUSTOM"; autoBadge.style.color = "#3b82f6"; }
+  }
+  window.calculatePaymentAmount();
+};
+
+window.triggerStudentDatePicker = (inputId) => {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  if (inputId === "student-end-date") {
+    const modeSelect = document.getElementById("student-duration-mode");
+    if (modeSelect && modeSelect.value !== "custom") {
+      modeSelect.value = "custom";
+      window.onStudentRenewalModeChange();
+    }
+  }
+  if (typeof el.showPicker === "function") {
+    try { el.showPicker(); return; } catch (_) {}
+  }
+  el.focus();
+  el.click();
+};
+
 window.calculatePaymentAmount = async () => {
-    if (!currentStudent) return;
-    const { monthsOwed, nextStartStr, nextEndStr } = computeUnpaidMonths(currentStudent.paymentDueDate);
-    const months = monthsOwed > 0 ? 1 : (parseInt(document.getElementById("payment-months")?.value) || 1);
+  if (!currentStudent) return;
+  const startEl = document.getElementById("student-start-date");
+  const endEl = document.getElementById("student-end-date");
+  const startDisp = document.getElementById("student-start-disp");
+  const endDisp = document.getElementById("student-end-disp");
+  const modeSelect = document.getElementById("student-duration-mode");
+  const valInput = document.getElementById("student-duration-val");
+  const amountDisplay = document.getElementById("payment-amount-display");
+  const amountInput = document.getElementById("payment-amount");
 
-    const basePrice = await getPlanPrice(currentStudent.planName);
-    const total = basePrice * months;
-    
-    const amountDisplay = document.getElementById("payment-amount-display");
-    const amountInput = document.getElementById("payment-amount");
-    if (amountDisplay) amountDisplay.innerText = `₹${total}`;
-    if (amountInput) amountInput.value = total;
+  const basePrice = await getPlanPrice(currentStudent.planName);
+  const mode = modeSelect?.value || "monthly";
 
-    const startEl = document.getElementById("payment-start-date");
-    const endEl = document.getElementById("payment-end-date");
-    if (monthsOwed > 0) {
-      if (startEl) startEl.innerText = nextStartStr;
-      if (endEl) endEl.innerText = nextEndStr;
-    } else {
-      let startDate = new Date();
-      if (currentStudent.paymentDueDate) {
-        const parsed = new Date(currentStudent.paymentDueDate);
-        if (!isNaN(parsed.getTime())) startDate = parsed;
+  let startVal = startEl?.value;
+  if (!startVal) {
+    const today = new Date();
+    let defStart = today;
+    if (currentStudent.paymentDueDate) {
+      const parsed = new Date(`${currentStudent.paymentDueDate}T00:00:00`);
+      if (!isNaN(parsed.getTime())) {
+        parsed.setDate(parsed.getDate() + 1);
+        if (parsed >= today) defStart = parsed;
       }
-      const endDate = new Date(startDate);
-      endDate.setMonth(endDate.getMonth() + months);
-      if (startEl) startEl.innerText = startDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-      if (endEl) endEl.innerText = endDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     }
-  };
+    startVal = defStart.toISOString().split("T")[0];
+    if (startEl) startEl.value = startVal;
+  }
 
-  window.handlePaymentSubmit = async () => {
-    const btn = document.getElementById("btn-submit-payment");
-    const txnId = document.getElementById("payment-txnid").value;
+  let total = basePrice;
+  let durationDays = 30;
 
-    if (!txnId) return window.showToast(window.t ? window.t('Please enter the Transaction ID.') || "Please enter the Transaction ID." : "Please enter the Transaction ID.", "error");
-
-    const { monthsOwed, nextMonthLabel } = computeUnpaidMonths(currentStudent?.paymentDueDate);
-    const months = monthsOwed > 0 ? 1 : (parseInt(document.getElementById("payment-months")?.value) || 1);
-    const amount = document.getElementById("payment-amount").value;
-    const monthLabel = monthsOwed > 0 ? nextMonthLabel : null;
-
-    btn.innerHTML = "Submitting...";
-    btn.disabled = true;
-
-    // Attach up to 4 payment screenshots (compressed) to THIS payment record.
-    let screenshots = [];
-    try { screenshots = await collectPaymentScreenshots(); }
-    catch (e) { console.warn("[payment-ss] compress failed:", e.message); }
-
-    const res = await submitPaymentRequest(currentStudent, txnId, months, amount, monthLabel, screenshots);
-    if (res.success) {
-      window.showToast(window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!", "success");
-      document.getElementById("payment-txnid").value = "";
-      const ssInput = document.getElementById("payment-ss");
-      if (ssInput) ssInput.value = "";
-    } else {
-      window.showToast("Failed: " + res.error, "error");
+  if (mode === "monthly") {
+    const months = Math.max(1, Number(valInput?.value || 1));
+    durationDays = months * 30;
+    const endStr = addDaysToStr(startVal, durationDays - 1);
+    if (endEl) endEl.value = endStr;
+    total = basePrice * months;
+  } else if (mode === "days") {
+    const days = Math.max(1, Number(valInput?.value || 30));
+    durationDays = days;
+    const endStr = addDaysToStr(startVal, days - 1);
+    if (endEl) endEl.value = endStr;
+    total = Math.round((basePrice / 30) * days);
+  } else if (mode === "custom") {
+    let endVal = endEl?.value;
+    if (!endVal || endVal < startVal) {
+      endVal = addDaysToStr(startVal, 29);
+      if (endEl) endEl.value = endVal;
     }
+    const d1 = new Date(`${startVal}T00:00:00`);
+    const d2 = new Date(`${endVal}T00:00:00`);
+    durationDays = Math.max(1, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1);
+    total = Math.round((basePrice / 30) * durationDays);
+  }
 
-    btn.innerHTML = "Submit Payment Request";
+  if (amountDisplay) amountDisplay.innerText = `₹${total}`;
+  if (amountInput) amountInput.value = total;
+  if (startDisp && startEl) startDisp.innerText = fmtDispDate(startEl.value);
+  if (endDisp && endEl) endDisp.innerText = fmtDispDate(endEl.value);
+};
+
+window.handlePaymentSubmit = async () => {
+  const btn = document.getElementById("btn-submit-payment");
+  const txnId = document.getElementById("payment-txnid").value;
+
+  if (!txnId) return window.showToast(window.t ? window.t('Please enter the Transaction ID.') || "Please enter the Transaction ID." : "Please enter the Transaction ID.", "error");
+
+  const modeSelect = document.getElementById("student-duration-mode");
+  const valInput = document.getElementById("student-duration-val");
+  const startEl = document.getElementById("student-start-date");
+  const endEl = document.getElementById("student-end-date");
+  const amount = document.getElementById("payment-amount").value;
+
+  const startDate = startEl?.value;
+  const endDate = endEl?.value;
+  const mode = modeSelect?.value || "monthly";
+  const renewalMonths = mode === "monthly" ? Number(valInput?.value || 1) : 1;
+
+  const d1 = new Date(`${startDate}T00:00:00`);
+  const d2 = new Date(`${endDate}T00:00:00`);
+  const durationDays = Math.max(1, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1);
+
+  btn.innerHTML = "Submitting...";
+  btn.disabled = true;
+
+  // Single mandatory payment screenshot proof
+  let screenshot = "";
+  try {
+    screenshot = await collectPaymentScreenshot();
+  } catch (e) {
+    btn.innerHTML = "Submit Renewal Request";
     btn.disabled = false;
-  };
+    return window.showToast(e.message || "Payment screenshot proof is required.", "error");
+  }
+  if (!screenshot) {
+    btn.innerHTML = "Submit Renewal Request";
+    btn.disabled = false;
+    return window.showToast("Payment screenshot proof is required.", "error");
+  }
+
+  const res = await submitPaymentRequest(
+    currentStudent,
+    txnId,
+    renewalMonths,
+    amount,
+    null,
+    screenshot,
+    { startDate, endDate, durationDays, durationMode: mode }
+  );
+  if (res.success) {
+    window.showToast(window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!", "success");
+    document.getElementById("payment-txnid").value = "";
+    const ssInput = document.getElementById("payment-ss");
+    if (ssInput) ssInput.value = "";
+  } else {
+    window.showToast("Failed: " + res.error, "error");
+  }
+
+  btn.innerHTML = "Submit Renewal Request";
+  btn.disabled = false;
+};
 
   window.handleComplaintSubmit = async () => {
     const btn = document.getElementById("btn-submit-complaint");
@@ -434,7 +593,7 @@ window.calculatePaymentAmount = async () => {
       document.getElementById("complaint-category").value = "";
       document.getElementById("complaint-description").value = "";
     } else {
-      window.showToast(window.t ? window.t('Failed: ') || "Failed: " : "Failed: " + res.error, "error");
+      window.showToast((window.t ? (window.t('Failed: ') || "Failed: ") : "Failed: ") + (res.error || ""), "error");
     }
 
     btn.innerHTML = "Submit Complaint";
@@ -622,6 +781,7 @@ const sBeep = () => {
 const sPaintBell = (unread) => {
   const dot = document.getElementById("topbar-notif-dot");
   if (!dot) return;
+  const mobDot = document.getElementById("mob-notif-dot");
   if (unread > 0) {
     dot.style.display = "flex";
     dot.style.width = "auto";
@@ -638,9 +798,11 @@ const sPaintBell = (unread) => {
     dot.style.backgroundColor = "#ef4444";
     dot.style.borderRadius = "999px";
     dot.textContent = unread > 9 ? "9+" : String(unread);
+    if (mobDot) mobDot.style.display = "block";
   } else {
     dot.style.display = "none";
     dot.textContent = "";
+    if (mobDot) mobDot.style.display = "none";
   }
 };
 
@@ -1004,19 +1166,142 @@ const renderPortal = () => {
     });
   }
 
+  // Single source of truth: helper to resolve plan amount so it is never ₹0
+  const resolveRecordAmount = (r, student) => {
+    if (r && Number(r.amount) > 0) return Number(r.amount);
+    if (student && Number(student.amount || student.planPrice || student.price || student.fee) > 0) {
+      return Number(student.amount || student.planPrice || student.price || student.fee);
+    }
+    const planName = (r && (r.newPlan || r.planName)) || (student && student.planName);
+    const planId = (r && r.planId) || (student && student.planId);
+    const p = (planId && onboardingPlans.find(x => x.id === planId)) ||
+              (planName && onboardingPlans.find(x => (x.planName || "").toLowerCase().trim() === String(planName).toLowerCase().trim()));
+    if (p && Number(p.price) > 0) return Number(p.price);
+    return 1000;
+  };
+
+  const isValidImg = (u) => typeof u === "string" && (u.startsWith("data:image/") || u.startsWith("http://") || u.startsWith("https://") || u.startsWith("blob:"));
+  const studentDocProof = (s._documents && isValidImg(s._documents.paymentScreenshot))
+    ? s._documents.paymentScreenshot
+    : (isValidImg(s.paymentScreenshot) ? s.paymentScreenshot : (isValidImg(s.paymentScreenshotUrl) ? s.paymentScreenshotUrl : ""));
+
+  const resolveRecordProof = (r, student) => {
+    let u = r?.screenshot || r?.paymentScreenshotUrl || (Array.isArray(r?.screenshots) && r.screenshots[0]) || "";
+    if (!isValidImg(u)) {
+      if (isValidImg(studentDocProof)) u = studentDocProof;
+    }
+    return isValidImg(u) ? u : "";
+  };
+
+  // Auto-heal single source of truth in Firestore + auto-cleanup of duplicate docs
+  if (s.id && (s.status === "Active" || s.approvalStatus === "Approved") && !window.__portalRenewalsSyncRunning) {
+    window.__portalRenewalsSyncRunning = true;
+    (async () => {
+      try {
+        const renQ = query(collection(db, "renewals"), where("studentId", "==", s.id));
+        const renSnap = await getDocs(renQ);
+        const docsList = [];
+        renSnap.forEach(d => docsList.push({ id: d.id, ...d.data() }));
+
+        // Detect and clean up any duplicate renewal records in Firestore
+        const seenDocs = new Map();
+        const duplicatesToDelete = [];
+        for (const rd of docsList) {
+          const k = `${rd.startDate || ""}_${rd.endDate || ""}_${Number(rd.amount) || 0}_${String(rd.transactionId || "").trim().toUpperCase()}`;
+          if (seenDocs.has(k)) {
+            const prev = seenDocs.get(k);
+            if (!prev.screenshot && (rd.screenshot || rd.paymentScreenshotUrl)) {
+              duplicatesToDelete.push(prev.id);
+              seenDocs.set(k, rd);
+            } else {
+              duplicatesToDelete.push(rd.id);
+            }
+          } else {
+            seenDocs.set(k, rd);
+          }
+        }
+
+        // Delete duplicates from Firestore so only one single truth record remains
+        for (const dupId of duplicatesToDelete) {
+          try {
+            await deleteDoc(doc(db, "renewals", dupId));
+            console.log("[portal] Removed duplicate renewal from Firestore:", dupId);
+          } catch (delErr) {
+            console.warn("[portal] Duplicate cleanup skipped:", delErr);
+          }
+        }
+
+        // If no renewal exists at all in Firestore, create the admission record with deterministic doc ID
+        if (seenDocs.size === 0) {
+          const rawShot = isValidImg(studentDocProof) ? studentDocProof : "";
+          const realAmt = resolveRecordAmount(null, s);
+          const stDate = s.startDate || (s.createdAt?.seconds ? new Date(s.createdAt.seconds * 1000).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]);
+          const enDate = s.paymentDueDate || s.endDate || stDate;
+          const renDoc = {
+            studentId: s.id,
+            studentName: s.name || "Student",
+            oldPlan: "",
+            newPlan: s.planName || "Regular Fixed Premium",
+            startDate: stDate,
+            endDate: enDate,
+            amount: realAmt,
+            paymentMethod: s.paymentMethod || "UPI",
+            transactionId: s.transactionId || "ADMISSION",
+            status: "Completed",
+            type: "Initial Admission",
+            source: "admission",
+            renewedBy: "System",
+            createdAt: s.createdAt || serverTimestamp()
+          };
+          if (rawShot) {
+            renDoc.screenshot = rawShot;
+            renDoc.paymentScreenshotUrl = rawShot;
+            renDoc.screenshots = [rawShot];
+          }
+          await setDoc(doc(db, "renewals", "admission_" + s.id), renDoc, { merge: true });
+        }
+      } catch (err) {
+        console.warn("[portal] renewals sync skipped:", err);
+      } finally {
+        setTimeout(() => { window.__portalRenewalsSyncRunning = false; }, 3000);
+      }
+    })();
+  }
+
+  // Payments generation
+  let displayPayments = [...currentPayments];
+  const hasAdmissionPay = displayPayments.some(p => p.source === "onboarding" || p.source === "admission" || (p.transactionId && s.transactionId && p.transactionId === s.transactionId));
+  if (!hasAdmissionPay && (s.paymentMethod || s.transactionId || s.paymentScreenshotUrl || studentDocProof || s.status === "Active" || s.approvalStatus === "Approved")) {
+    const realAmt = resolveRecordAmount(null, s);
+    displayPayments.push({
+      id: "initial-admission",
+      date: s.startDate || s.admissionDate || (s.createdAt?.seconds ? new Date(s.createdAt.seconds * 1000).toISOString() : new Date().toISOString()),
+      planName: s.planName || "Membership Admission",
+      amount: realAmt,
+      paymentMethod: s.paymentMethod || "UPI",
+      transactionId: s.transactionId || "Admission",
+      status: (s.status === "Active" || s.approvalStatus === "Approved") ? "approved" : "pending",
+      source: "admission",
+      monthLabel: s.planName || "Admission",
+      screenshot: studentDocProof,
+      paymentScreenshotUrl: studentDocProof,
+      screenshots: studentDocProof ? [studentDocProof] : []
+    });
+  }
+
   let paymentsHtml = "";
-  if (currentPayments.length === 0) {
-    paymentsHtml = `<tr><td colspan="5" style="text-align:center; color: var(--text-muted);">No payment history.</td></tr>`;
+  if (displayPayments.length === 0) {
+    paymentsHtml = `<tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No payment history.</td></tr>`;
   } else {
-    currentPayments.forEach(p => {
+    displayPayments.forEach(p => {
       let badgeClass = "badge-pending";
       if (p.status === "approved" || p.status === "Completed") badgeClass = "badge-paid";
       if (p.status === "rejected") badgeClass = "badge-absent";
-      const pDate = p.date ? new Date(p.date).toLocaleDateString() : "—";
+      const pDate = p.date ? new Date(p.date).toLocaleDateString() : (s.startDate || "—");
+      let pPeriod = p.monthLabel || "—";
       const monthsPart = (p.renewalMonths != null && p.renewalMonths !== "") ? Number(p.renewalMonths)
         : (p.renewalPeriod != null && p.renewalPeriod !== "" ? Number(p.renewalPeriod) : 0);
       const daysPart = Number(p.renewalDays) || 0;
-      let pPeriod = p.monthLabel || "—";
       if (monthsPart || daysPart) {
         const bits = [];
         if (monthsPart) bits.push(`${monthsPart} Mo.`);
@@ -1025,13 +1310,19 @@ const renderPortal = () => {
       } else if (p.renewalPeriod != null && p.renewalPeriod !== "") {
         pPeriod = `${p.renewalPeriod} Mo.`;
       }
-      if (p.source === "onboarding") pPeriod += ` · First`;
+      if (p.source === "onboarding" || p.source === "admission") pPeriod = s.startDate ? `${s.startDate} to ${s.paymentDueDate || s.endDate || "—"}` : "Admission";
       const pTxn = p.transactionId || "—";
       const pStatus = String(p.status || "pending").toUpperCase();
-      paymentsHtml += `<tr><td>${pDate}</td><td>${pPeriod}</td><td>₹${Number(p.amount) || 0}</td><td>${pTxn}</td><td><span class="badge ${badgeClass}">${pStatus}</span></td></tr>`;
+      const proofUrl = resolveRecordProof(p, s);
+      const proofCell = isValidImg(proofUrl)
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
+
+      paymentsHtml += `<tr><td>${pDate}</td><td>${pPeriod}</td><td>₹${resolveRecordAmount(p, s)}</td><td>${pTxn}</td><td><span class="badge ${badgeClass}">${pStatus}</span></td><td style="text-align:center;">${proofCell}</td></tr>`;
     });
   }
 
+  // Complaints HTML Generation
   let complaintsHtml = "";
   if (currentComplaints.length === 0) {
     complaintsHtml = `<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">No complaints history.</td></tr>`;
@@ -1040,9 +1331,7 @@ const renderPortal = () => {
       let badgeClass = "badge-pending";
       if (c.status === "Resolved" || c.status === "Closed") badgeClass = "badge-paid";
       if (c.status === "In Progress") badgeClass = "badge-info";
-
       const resNote = c.resolutionNote ? `<br><small style="color:var(--text-muted)"><i>Admin: ${c.resolutionNote}</i></small>` : "";
-
       complaintsHtml += `
         <tr>
           <td>${new Date(c.date).toLocaleDateString()}</td>
@@ -1053,18 +1342,139 @@ const renderPortal = () => {
     });
   }
 
+  // Renewals HTML Generation with Proof column, admission fallback, and strict deduplication
+  let displayRenewals = [...currentRenewals];
+  const hasAdmissionRenewal = displayRenewals.some(r => r.source === "onboarding" || r.source === "admission" || (r.startDate && r.startDate === s.startDate));
+  if (!hasAdmissionRenewal && (s.status === "Active" || s.approvalStatus === "Approved") && (s.startDate || s.paymentDueDate)) {
+    const realAmt = resolveRecordAmount(null, s);
+    displayRenewals.push({
+      id: "initial-admission-renewal",
+      newPlan: s.planName || "Regular Fixed Premium",
+      startDate: s.startDate || "—",
+      endDate: s.paymentDueDate || s.endDate || "—",
+      amount: realAmt,
+      paymentMethod: s.paymentMethod || "UPI",
+      screenshot: studentDocProof,
+      paymentScreenshotUrl: studentDocProof,
+      source: "admission",
+      createdAt: s.createdAt || null
+    });
+  }
+
+  // Deduplicate displayRenewals by date + amount + txnId
+  const uniqueRenewalsMap = new Map();
+  displayRenewals.forEach(r => {
+    const st = r.startDate || "";
+    const en = r.endDate || "";
+    const amt = resolveRecordAmount(r, s);
+    const txn = String(r.transactionId || s.transactionId || "ADMISSION").trim().toUpperCase();
+    const key = `${st}_${en}_${amt}_${txn}`;
+    if (!uniqueRenewalsMap.has(key)) {
+      uniqueRenewalsMap.set(key, r);
+    } else {
+      const existing = uniqueRenewalsMap.get(key);
+      if (!resolveRecordProof(existing, s) && resolveRecordProof(r, s)) {
+        uniqueRenewalsMap.set(key, r);
+      }
+    }
+  });
+  displayRenewals = Array.from(uniqueRenewalsMap.values());
+
   let renewalsHtml = "";
-  if (currentRenewals.length === 0) {
-    renewalsHtml = `<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">No renewal history.</td></tr>`;
+  if (displayRenewals.length === 0) {
+    renewalsHtml = `<tr><td colspan="5" style="text-align:center; color: var(--text-muted);">No renewal history.</td></tr>`;
   } else {
-    currentRenewals.forEach(r => {
-      const dateStr = r.createdAt && r.createdAt.seconds ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : "Just now";
+    displayRenewals.forEach(r => {
+      const dateStr = r.startDate || (r.createdAt && r.createdAt.seconds ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : "Admission");
+      const proofUrl = resolveRecordProof(r, s);
+      const proofCell = isValidImg(proofUrl)
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Renewal Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
       renewalsHtml += `
         <tr>
           <td>${dateStr}</td>
           <td>${r.newPlan || "—"}</td>
           <td style="font-size:0.85rem;">${r.startDate || "—"} to ${r.endDate || "—"}</td>
-          <td class="amount">₹${Number(r.amount) || 0}</td>
+          <td class="amount">₹${resolveRecordAmount(r, s)}</td>
+          <td style="text-align:center;">${proofCell}</td>
+        </tr>
+      `;
+    });
+  }
+
+  // Unified Payment & Renewal History (Single Source of Truth with strict deduplication)
+  const unifiedMap = new Map();
+  displayRenewals.forEach(r => {
+    const rDate = r.startDate || (r.createdAt && r.createdAt.seconds ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : "—");
+    const rPeriod = (r.startDate && r.endDate) ? `${r.startDate} to ${r.endDate}` : "Admission";
+    const rAmount = resolveRecordAmount(r, s);
+    const rTxn = String(r.transactionId || s.transactionId || "ADMISSION").trim().toUpperCase();
+    const rKey = `${rDate}_${rPeriod}_${rAmount}_${rTxn}`;
+    if (!unifiedMap.has(rKey)) {
+      unifiedMap.set(rKey, {
+        id: r.id,
+        date: rDate,
+        plan: r.newPlan || s.planName || "Membership Plan",
+        period: rPeriod,
+        amount: rAmount,
+        txnId: rTxn,
+        status: (r.status || "APPROVED").toUpperCase(),
+        proofUrl: resolveRecordProof(r, s)
+      });
+    }
+  });
+
+  displayPayments.forEach(p => {
+    const pDate = p.date ? new Date(p.date).toLocaleDateString() : (s.startDate || "—");
+    const pPeriod = p.monthLabel || "Admission";
+    const pAmount = resolveRecordAmount(p, s);
+    const pTxn = String(p.transactionId || "").trim().toUpperCase();
+    const pKey = `${pDate}_${pPeriod}_${pAmount}_${pTxn}`;
+
+    const isCovered = Array.from(unifiedMap.values()).some(u => 
+      (pTxn && u.txnId && pTxn === u.txnId) ||
+      (p.id === "initial-admission" && (u.id === "initial-admission-renewal" || u.id === "admission_" + s.id || String(u.txnId).toUpperCase() === "ADMISSION")) ||
+      (p.date && u.date && p.date.split("T")[0] === u.date && pAmount === u.amount) ||
+      (unifiedMap.has(pKey))
+    );
+    if (!isCovered) {
+      unifiedMap.set(pKey, {
+        id: p.id,
+        date: pDate,
+        plan: p.planName || s.planName || "Admission",
+        period: pPeriod,
+        amount: pAmount,
+        txnId: pTxn || "—",
+        status: String(p.status || "approved").toUpperCase(),
+        proofUrl: resolveRecordProof(p, s)
+      });
+    }
+  });
+
+  const unifiedItems = Array.from(unifiedMap.values());
+
+  let unifiedHistoryHtml = "";
+  if (unifiedItems.length === 0) {
+    unifiedHistoryHtml = `<tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding:2rem;">No payment or renewal history found.</td></tr>`;
+  } else {
+    unifiedItems.forEach(item => {
+      const isApproved = item.status === "APPROVED" || item.status === "COMPLETED";
+      const isRejected = item.status === "REJECTED";
+      const badgeClass = isApproved ? "badge-paid" : (isRejected ? "badge-absent" : "badge-pending");
+      const hasProof = isValidImg(item.proofUrl);
+      const proofCell = hasProof
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${item.proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
+
+      unifiedHistoryHtml += `
+        <tr>
+          <td>${item.date}</td>
+          <td><strong>${item.plan}</strong></td>
+          <td style="font-size:0.85rem; color:var(--text-secondary);">${item.period}</td>
+          <td class="amount">₹${item.amount}</td>
+          <td style="font-size:0.85rem; font-family:monospace;">${item.txnId}</td>
+          <td><span class="badge ${badgeClass}">${item.status}</span></td>
+          <td style="text-align:center;">${proofCell}</td>
         </tr>
       `;
     });
@@ -1370,12 +1780,12 @@ const renderPortal = () => {
           <div class="card-header"><h3>Recent check-ins</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-attendance')">View all</button></div>
           ${currentAttendance.length === 0
             ? `<div style="text-align:center; color:var(--text-muted); padding:1.5rem 0;">No check-ins yet — use Check-In Now when you arrive.</div>`
-            : `<table class="data-table"><thead><tr><th>Date</th><th>Seat</th><th>In</th><th>Out</th><th>Status</th></tr></thead><tbody>${currentAttendance.slice(0, 5).map(r => {
+            : `<div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Seat</th><th>In</th><th>Out</th><th>Status</th></tr></thead><tbody>${currentAttendance.slice(0, 5).map(r => {
                 const cIn = r.checkIn ? new Date(r.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
                 const cOut = r.checkOut ? new Date(r.checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : (r.status === "Active" ? "In now" : "—");
                 const badge = r.status === "Active" ? `<span class="badge badge-pending">Active</span>` : `<span class="badge badge-paid">Done</span>`;
                 return `<tr><td>${r.date || "—"}</td><td>${r.seatNumber || "—"}</td><td>${cIn}</td><td>${cOut}</td><td>${badge}</td></tr>`;
-              }).join("")}</tbody></table>`}
+              }).join("")}</tbody></table></div>`}
         </div>
         <div class="card">
           <div class="card-header"><h3>Payments</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-payments')">Pay / history</button></div>
@@ -1489,43 +1899,58 @@ const renderPortal = () => {
                 </div>
               </div>
 
-              <!-- Payment Period -->
-              <div style="margin-bottom: 1.5rem;">
-                <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 0.5rem; display: block;">Payment Period</label>
-                <div class="sp-alert ${_monthsOwed > 0 ? "sp-alert-warn" : "sp-alert-ok"}" style="padding:1.25rem 1.5rem; align-items:center; justify-content:space-between; margin-bottom:0;">
-                  <div style="text-align: center; flex:1;">
-                    <div class="sp-alert-title" style="font-size:0.75rem;">▶ START</div>
-                    <div style="font-size: 1.1rem; font-weight: 700; margin-top: 6px;" id="payment-start-date">${_monthsOwed > 0 ? _nextStartStr : (s.paymentDueDate ? new Date(s.paymentDueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Today')}</div>
+              <!-- DATES SECTION -->
+              <div style="margin-bottom: 1.25rem;">
+                <label style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; display: block; letter-spacing:0.05em;">DATES *</label>
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:1rem 1.25rem; background:var(--bg-card); border:1px solid var(--border); border-radius:12px; margin-bottom:0;">
+                  <!-- START -->
+                  <div style="text-align: center; flex:1; cursor:pointer;" onclick="window.triggerStudentDatePicker('student-start-date')">
+                    <div style="font-size:0.72rem; font-weight:800; color:#3b82f6; display:flex; align-items:center; justify-content:center; gap:4px; text-transform:uppercase;">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+                      START
+                    </div>
+                    <div style="font-size: 1.15rem; font-weight: 700; margin-top: 4px;" id="student-start-disp">--</div>
+                    <div style="font-size: 11px; color: var(--text-muted); display:flex; align-items:center; justify-content:center; gap:2px;">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit
+                    </div>
+                    <input type="date" id="student-start-date" style="position:absolute; opacity:0; width:1px; height:1px; pointer-events:none;" onchange="window.calculatePaymentAmount()" />
                   </div>
-                  <div style="font-size: 1.5rem; margin: 0 1rem; user-select: none; opacity:0.6;">→</div>
-                  <div style="text-align: center; flex:1;">
-                    <div class="sp-alert-title" style="font-size:0.75rem;">■ END</div>
-                    <div style="font-size: 1.1rem; font-weight: 700; margin-top: 6px;" id="payment-end-date">${_monthsOwed > 0 ? _nextEndStr : '--'}</div>
+
+                  <!-- ARROW -->
+                  <div style="font-size: 1.4rem; margin: 0 0.75rem; user-select: none; opacity:0.6; color:var(--text-muted);">→</div>
+
+                  <!-- END -->
+                  <div style="text-align: center; flex:1; cursor:pointer;" onclick="window.triggerStudentDatePicker('student-end-date')">
+                    <div style="font-size:0.72rem; font-weight:800; color:#16a34a; display:flex; align-items:center; justify-content:center; gap:4px; text-transform:uppercase;">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+                      END
+                    </div>
+                    <div style="font-size: 1.15rem; font-weight: 700; margin-top: 4px;" id="student-end-disp">--</div>
+                    <div id="student-auto-badge" style="font-size: 0.7rem; font-weight: 800; color: #16a34a; letter-spacing: 0.05em; text-transform: uppercase;">AUTO</div>
+                    <input type="date" id="student-end-date" style="position:absolute; opacity:0; width:1px; height:1px; pointer-events:none;" onchange="window.calculatePaymentAmount()" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- DURATION SECTION -->
+              <div style="margin-bottom: 1.25rem;">
+                <label style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; display: block; letter-spacing:0.05em;">DURATION *</label>
+                <div class="sp-duration-row" style="display:grid; grid-template-columns: 1.4fr 1fr; gap:10px; align-items:center;">
+                  <div>
+                    <select id="student-duration-mode" onchange="window.onStudentRenewalModeChange()" class="sp-input" style="width:100%; padding:10px; border-radius:8px;">
+                      <option value="monthly" selected>📅 Monthly</option>
+                      <option value="days">📅 Days</option>
+                      <option value="custom">📅 Custom Date</option>
+                    </select>
+                  </div>
+                  <div id="student-duration-val-wrap" style="display:flex; align-items:center; gap:8px;">
+                    <input type="number" id="student-duration-val" min="1" value="1" class="sp-input" style="width:80px; padding:10px; border-radius:8px;" oninput="window.calculatePaymentAmount()" />
+                    <span id="student-duration-unit" style="font-size:13px; font-weight:600; color:var(--text-muted);">month</span>
                   </div>
                 </div>
               </div>
 
               <form onsubmit="event.preventDefault(); window.handlePaymentSubmit();" class="form-grid" style="gap: 1.5rem;">
-                ${_monthsOwed > 0 ? `
-                <div class="form-group">
-                  <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Paying For (Locked)</label>
-                  <div class="sp-alert sp-alert-warn" style="padding:10px 14px; margin-bottom:0; font-weight:600; font-size:0.95rem; align-items:center;">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    <span>${_nextMonthLabel}</span>
-                  </div>
-                  <input type="hidden" id="payment-months" value="1" />
-                </div>
-                ` : `
-                <div class="form-group">
-                  <label style="font-size: 0.75rem; font-weight: 600; color: var(--danger); text-transform: uppercase;">Duration *</label>
-                  <select id="payment-months" onchange="window.calculatePaymentAmount()" class="sp-input">
-                    <option value="1">1 Month</option>
-                    <option value="2">2 Months</option>
-                    <option value="3">3 Months</option>
-                    <option value="6">6 Months</option>
-                  </select>
-                </div>
-                `}
                 <div class="form-group">
                   <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">Amount (₹)</label>
                   <div id="payment-amount-display" style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); padding: 6px 0;">₹--</div>
@@ -1536,14 +1961,15 @@ const renderPortal = () => {
                   <input type="text" id="payment-txnid" required class="sp-input" placeholder="Enter your 12-digit UPI Txn ID" />
                 </div>
                 <div class="form-group full-width">
-                  <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">Payment Screenshot (Optional · up to 4)</label>
-                  <input type="file" id="payment-ss" accept="image/*" multiple class="sp-input" style="padding:8px;" />
+                  <label style="font-size: 0.75rem; font-weight: 700; color:var(--text-primary); text-transform: uppercase; letter-spacing:0.04em;">Payment Screenshot (Required) *</label>
+                  <input type="file" id="payment-ss" accept="image/*" required class="sp-input" style="padding:8px;" />
+                  <small style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:4px;">Upload 1 clear screenshot proof of your payment.</small>
                 </div>
                 <div class="form-group full-width sp-actions">
                   <button type="button" class="btn btn-ghost" title="Clear the transaction ID field" onclick="document.getElementById('payment-txnid').value=''">Clear</button>
-                  <button type="submit" id="btn-submit-payment" class="btn btn-primary sp-pay-submit">
+                  <button type="submit" id="btn-submit-payment" class="btn btn-primary sp-pay-submit" style="background:#16a34a; border-color:#16a34a;">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-                    ${_monthsOwed > 0 ? `Pay for ${_nextMonthLabel}` : 'Submit Renewal Request'}
+                    Submit Renewal Request
                   </button>
                 </div>
               </form>
@@ -1562,8 +1988,30 @@ const renderPortal = () => {
         </div>
 
 
-        <div class="card"><h3 style="margin-bottom: 1rem;">Renewal History</h3><table class="data-table"><thead><tr><th data-i18n="table.date">\${window.t ? window.t("table.date") : "Date"}</th><th>Plan</th><th>Period</th><th data-i18n="table.amount">\${window.t ? window.t("table.amount") : "Amount"}</th></tr></thead><tbody>${renewalsHtml}</tbody></table></div>
-        <div class="card"><h3 style="margin-bottom: 1rem;">My Payments</h3><table class="data-table"><thead><tr><th data-i18n="table.date">\${window.t ? window.t("table.date") : "Date"}</th><th>Period</th><th data-i18n="table.amount">\${window.t ? window.t("table.amount") : "Amount"}</th><th>Txn ID</th><th data-i18n="table.status">\${window.t ? window.t("table.status") : "Status"}</th></tr></thead><tbody>${paymentsHtml}</tbody></table></div>
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.25rem; flex-wrap:wrap; gap:8px;">
+            <div>
+              <h3 style="margin:0; font-size:1.15rem; font-weight:700;">Payment & Renewal History</h3>
+              <div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">Verified records of your admission and renewal payments</div>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Plan</th>
+                  <th>Period</th>
+                  <th>Amount</th>
+                  <th>Txn ID</th>
+                  <th>Status</th>
+                  <th style="text-align:center;">Proof</th>
+                </tr>
+              </thead>
+              <tbody>${unifiedHistoryHtml}</tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -1598,7 +2046,7 @@ const renderPortal = () => {
           <h3 style="margin:0;">Recent Attendance</h3>
           <button id="btn-pdf" class="btn btn-ghost" onclick="window.handleDownloadPDF()">Download PDF</button>
         </div>
-        <table class="data-table"><thead><tr><th data-i18n="table.date">\${window.t ? window.t("table.date") : "Date"}</th><th>Check In</th><th>Check Out</th><th>Duration</th><th data-i18n="table.status">\${window.t ? window.t("table.status") : "Status"}</th></tr></thead><tbody>${historyHtml}</tbody></table>
+        <div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Check In</th><th>Check Out</th><th>Duration</th><th>Status</th></tr></thead><tbody>${historyHtml}</tbody></table></div>
       </div>
       <div class="card" style="padding: 1.5rem; text-align:center;">
         <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);">Today's Hours</h4>
@@ -1645,7 +2093,7 @@ const renderPortal = () => {
             </div>
           </form>
         </div>
-        <div class="card"><h3 style="margin-bottom: 1rem;">My Complaints</h3><table class="data-table"><thead><tr><th data-i18n="table.date">\${window.t ? window.t("table.date") : "Date"}</th><th>Category</th><th>Details</th><th data-i18n="table.status">\${window.t ? window.t("table.status") : "Status"}</th></tr></thead><tbody>${complaintsHtml}</tbody></table></div>
+        <div class="card"><h3 style="margin-bottom: 1rem;">My Complaints</h3><div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Category</th><th>Details</th><th>Status</th></tr></thead><tbody>${complaintsHtml}</tbody></table></div></div>
       </div>
     </div>
   `;

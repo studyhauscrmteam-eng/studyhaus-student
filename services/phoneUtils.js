@@ -23,6 +23,6 @@ export const phoneToAuthEmail = (phone) => {
 
 export const authEmailToPhone = (email) => {
   if (!email) return null;
-  const m = email.match(/^(\d{10})@student\.shreejilibrary\.com$/);
+  const m = email.match(/^(\d{10})(?:[._\w\d]*)?@student\.shreejilibrary\.com$/);
   return m ? m[1] : null;
 };

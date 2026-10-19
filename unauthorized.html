@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <title>Unauthorized Access — Studyhaus CRM</title>
   <link rel="stylesheet" href="style.css" />
@@ -15,11 +15,13 @@
       min-height: 100vh;
       background: var(--bg);
       text-align: center;
+      padding: 1rem 0;
     }
 
     .unauth-container {
       max-width: 400px;
-      margin: 2rem;
+      width: calc(100% - 2rem);
+      margin: 0 auto;
     }
 
     .icon {
@@ -30,18 +32,19 @@
 </head>
 
 <body class="light-mode">
-  <div class="icon"
-    style="color:var(--accent-red, #ef4444); display:flex; justify-content:center; margin-bottom:1.5rem;">
-    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      <line x1="12" y1="8" x2="12" y2="12" />
-      <line x1="12" y1="16" x2="12.01" y2="16" />
-    </svg>
-  </div>
-  <h1 style="color: var(--text-dark); margin-bottom: 0.5rem;">Access Denied</h1>
-  <p style="color: var(--text-light); margin-bottom: 2rem;">You do not have permission to view this page based on your
-    current role.</p>
-  <button id="go-back-btn" class="btn btn-primary">Return to Dashboard</button>
+  <div class="unauth-container">
+    <div class="icon"
+      style="color:var(--accent-red, #ef4444); display:flex; justify-content:center; margin-bottom:1.5rem;">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+    </div>
+    <h1 style="color: var(--text-dark); margin-bottom: 0.5rem; font-size: 1.5rem;">Access Denied</h1>
+    <p style="color: var(--text-light); margin-bottom: 2rem; font-size: 14px;">You do not have permission to view this page based on your
+      current role.</p>
+    <button id="go-back-btn" class="btn btn-primary" style="width: 100%; min-height: 44px;">Return to Dashboard</button>
   </div>
 
   <script type="importmap">

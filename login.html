@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <title>Student Login — Studyhaus</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -311,6 +311,23 @@
 
     .forgot-link:hover {
       text-decoration: underline;
+    }
+
+    @media (max-width: 480px) {
+      .auth-layout {
+        padding: 1.5rem 1rem;
+      }
+      .auth-card {
+        padding: 1.5rem 1.15rem;
+      }
+      .form-group input,
+      .pw-wrap input {
+        font-size: 16px !important;
+      }
+      .btn {
+        min-height: 44px;
+        font-size: 15px;
+      }
     }
   </style>
 </head>

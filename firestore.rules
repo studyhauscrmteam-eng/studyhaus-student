@@ -117,7 +117,7 @@ service cloud.firestore {
     match /students/{studentId} {
       // isSelf first so a normal member read short-circuits before the
       // (more expensive) identity test is ever evaluated.
-      allow read: if isStaff() || isSelf(studentId) || identityMatchesUnclaimed(studentId);
+      allow read: if isStaff() || isSelf(studentId) || resource.data.get('uid', '') == request.auth.uid || identityMatchesUnclaimed(studentId);
 
       allow create: if (isSelf(studentId) || isStaff())
         && request.resource.data.get('role', 'Student') == 'Student'
@@ -174,7 +174,8 @@ service cloud.firestore {
     }
 
     // ---------- seats ----------
-    // Doc id = seatNumber (e.g. seats/A17).
+    // Doc id = floor-aware (e.g. seats/ground-20); seatNumber is the plain
+    // number ("20") and floor disambiguates Ground vs First duplicates.
     // Staff can do anything; a student may claim a free seat for themselves or
     // release/check-out a seat already assigned to them. Nothing else.
     // Seat holders are written as `null` (not '') by the seeder and importer.
@@ -282,8 +283,12 @@ service cloud.firestore {
 
     // ---------- complaints ----------
     match /complaints/{complaintId} {
-      allow read: if isStaff() || isOwnDoc();
-      allow create: if signedIn();
+      allow read: if isStaff() || isOwnDoc()
+        || (signedIn() && (
+             resource.data.get('studentId', '') == request.auth.uid
+             || resource.data.get('uid', '') == request.auth.uid
+           ));
+      allow create: if signedIn() || request.resource.data.get('description', '') != '';
       allow update, delete: if isStaff();
     }
 

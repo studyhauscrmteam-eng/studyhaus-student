@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
   <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
   <title>Studyhaus — Reading Space CRM</title>
   <meta name="description"
@@ -15,6 +15,12 @@
 </head>
 
 <body data-default-page="student-portal">
+  <!-- Global loading cover: prevents unauthenticated or revoked dashboard flash -->
+  <div id="global-loader" style="position:fixed;inset:0;background:var(--bg-base,#f8fafc);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
+    <div style="width:36px;height:36px;border-radius:50%;border:3px solid var(--border,#e2e8f0);border-top-color:var(--primary,#059669);animation:guardSpin .8s linear infinite;"></div>
+    <div style="font-size:14px;font-weight:600;color:var(--text-secondary,#64748b);">Opening Studyhaus…</div>
+    <style>@keyframes guardSpin{to{transform:rotate(360deg)}}</style>
+  </div>
   <div class="app-layout">
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -31,6 +37,7 @@
           </div>
           <div style="font-size: 0.75rem; color:var(--text-muted); font-weight: 500;">Reading Space CRM</div>
         </div>
+        <button class="sidebar-close-btn" id="sidebar-close-btn" onclick="toggleSidebar()" aria-label="Close menu" title="Close menu">✕</button>
       </div>
       <nav class="sidebar-nav">
         <!-- Overview -->
@@ -91,6 +98,7 @@
         </div>
       </div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
 
     <!-- Main Content -->
     <div class="main-wrapper">
@@ -145,7 +153,7 @@
               <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
             </svg>
           </button>
-          <div class="topbar-user" tabindex="0">
+          <div class="topbar-user" tabindex="0" onclick="toggleUserMenu(event)">
             <div class="topbar-avatar" id="topbar-user-avatar" style="background:var(--primary); color:#fff; overflow:hidden;">S</div>
             <span class="topbar-username" id="topbar-user-name">Student</span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
@@ -207,6 +215,52 @@
       </main>
     </div>
   </div>
+
+  <!-- Mobile Bottom Navigation Bar (Quick thumb navigation on phones) -->
+  <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Mobile Navigation">
+    <button type="button" class="mob-nav-item active" data-page="student-portal" onclick="navigate('student-portal')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7" />
+        <rect x="14" y="3" width="7" height="7" />
+        <rect x="3" y="14" width="7" height="7" />
+        <rect x="14" y="14" width="7" height="7" />
+      </svg>
+      <span>Dashboard</span>
+    </button>
+    <button type="button" class="mob-nav-item" data-page="student-payments" onclick="navigate('student-payments')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="1" x2="12" y2="23" />
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+      </svg>
+      <span>Payments</span>
+    </button>
+    <button type="button" class="mob-nav-item" data-page="student-attendance" onclick="navigate('student-attendance')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </svg>
+      <span>Attendance</span>
+    </button>
+    <button type="button" class="mob-nav-item" data-page="student-complaints" onclick="navigate('student-complaints')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span>Complaints</span>
+    </button>
+    <button type="button" class="mob-nav-item" data-page="notifications" onclick="navigate('notifications')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+      <span>Alerts</span>
+      <span class="mob-nav-badge" id="mob-notif-dot" style="display:none;"></span>
+    </button>
+  </nav>
+
   <!-- Firebase Import Map for native browser ES modules -->
   <script type="importmap">
     {

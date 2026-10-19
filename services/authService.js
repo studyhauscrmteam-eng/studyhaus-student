@@ -6,7 +6,8 @@ import {
   sendPasswordResetEmail,
   setPersistence,
   browserLocalPersistence,
-  getAuth
+  getAuth,
+  updatePassword
 } from "firebase/auth";
 import { initializeApp, deleteApp } from "firebase/app";
 import { doc, getDoc } from "firebase/firestore";
@@ -113,28 +114,71 @@ export const loginWithPhone = async (identifier, password) => {
   const isPhone = /^[\d\s\-\+\(\)]{10,}$/.test(identifier);
   
   let authEmail;
+  let normPhone = "";
   if (isPhone) {
     if (!isValidPhone(identifier)) {
       throw new Error("Invalid phone number. Please enter a valid 10-digit number.");
     }
+    normPhone = normalizePhone(identifier);
     authEmail = phoneToAuthEmail(identifier);
   } else {
     // Assume it's an email
-    authEmail = identifier.trim();
+    authEmail = identifier.trim().toLowerCase();
   }
 
   try {
     return await login(authEmail, password);
   } catch (error) {
+    const code = error?.code || "";
+    const isAuthFail = code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password";
+
+    // If standard auth failed, check uniqueness for active provisioned Auth account (supports both phone and email logins)
+    if (isAuthFail) {
+      let createdAnon = false;
+      try {
+        const { signInAnonymously } = await import("firebase/auth");
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+          createdAnon = true;
+        }
+        const claimId = isPhone ? `phone_${normPhone}` : `email_${authEmail.toLowerCase()}`;
+        const claimSnap = await getDoc(doc(db, "uniqueness", claimId));
+        if (claimSnap.exists()) {
+          const claimData = claimSnap.data() || {};
+          if (claimData.authEmail && claimData.authEmail.toLowerCase() !== authEmail.toLowerCase()) {
+            try {
+              return await login(claimData.authEmail, password);
+            } catch (aliasErr) {
+              if (createdAnon && auth.currentUser?.isAnonymous) {
+                await signOut(auth).catch(() => {});
+              }
+              throw aliasErr;
+            }
+          }
+        }
+      } catch (checkErr) {
+        if (createdAnon && auth.currentUser?.isAnonymous) {
+          await signOut(auth).catch(() => {});
+        }
+        if (checkErr?.code === "auth/invalid-credential" || checkErr?.code === "auth/wrong-password") {
+          throw checkErr;
+        }
+      }
+      if (createdAnon && auth.currentUser?.isAnonymous) {
+        await signOut(auth).catch(() => {});
+      }
+    }
+
     // Firebase email matching can be case-sensitive. Accounts created from
     // the admin panel are stored lowercased — retry with the lowercase form
     // so typing the ID exactly as shown on the student card always works.
-    const code = error?.code || "";
     const lower = authEmail.toLowerCase();
-    if (!isPhone && authEmail !== lower &&
-        (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password")) {
-      return login(lower, password);
+    if (!isPhone && authEmail !== lower && isAuthFail) {
+      try {
+        return await login(lower, password);
+      } catch (_) {}
     }
+
     throw error;
   }
 };

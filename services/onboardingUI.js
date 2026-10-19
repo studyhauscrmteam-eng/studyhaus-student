@@ -150,10 +150,10 @@ const shell = (state, student, documents, plan, body, footer) => `
 /* --------------------------------------------------------------- step bodies */
 const detailsBody = (s) => `
   <h3 style="font-size:15px;margin:0 0 1rem;">Personal details</h3>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
     ${field("onb-name", "Full name", input("onb-name", "text", s.name || "", 'required placeholder="Your full name"'), true)}
     ${field("onb-phone", "Mobile", input("onb-phone", "tel", s.phone || "", 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
-    ${field("onb-parent-phone", "Parent mobile", input("onb-parent-phone", "tel", s.parentPhone || "", 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
+    ${field("onb-parent-phone", "Parent mobile", input("onb-parent-phone", "tel", s.parentPhone || "", 'pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile (optional)"'), false)}
     ${field("onb-email", "Email", input("onb-email", "email", s.email || "", 'required placeholder="you@example.com"'), true)}
     ${field("onb-dob", "Date of birth", input("onb-dob", "date", s.dob || "", "required"), true)}
     ${field("onb-gender", "Gender", `
@@ -161,10 +161,10 @@ const detailsBody = (s) => `
         <option value="">Select</option>
         ${["Male", "Female", "Other"].map((g) => `<option value="${g}" ${s.gender === g ? "selected" : ""}>${g}</option>`).join("")}
       </select>`, true)}
-    ${field("onb-college", "College / Institute", input("onb-college", "text", s.college || "", 'required placeholder="Your college"'), true)}
-    ${field("onb-course", "Course", input("onb-course", "text", s.course || "", 'required placeholder="e.g. B.Com, NEET"'), true)}
-    ${field("onb-address", "Address", `<textarea id="onb-address" rows="2" required style="${FLD}" placeholder="Residential address">${esc(s.address || "")}</textarea>`, true, false)}
-    ${field("onb-remarks", "Remarks / Exam goal", `<textarea id="onb-remarks" rows="2" required style="${FLD}" placeholder="What are you preparing for?">${esc(s.remarks || "")}</textarea>`, true, false)}
+    ${field("onb-college", "College / Institute", input("onb-college", "text", s.college || "", 'placeholder="Your college (optional)"'), false)}
+    ${field("onb-course", "Course", input("onb-course", "text", s.course || "", 'placeholder="e.g. B.Com, NEET (optional)"'), false)}
+        ${field("onb-address", "Address", `<textarea id="onb-address" rows="2" style="${FLD}" placeholder="Residential address (optional)">${esc(s.address || "")}</textarea>`, false, false)}
+        ${field("onb-remarks", "Remarks / Exam goal", `<textarea id="onb-remarks" rows="2" style="${FLD}" placeholder="What are you preparing for? (optional)">${esc(s.remarks || "")}</textarea>`, false, false)}
   </div>`;
 
 const documentsBody = (s) => `
@@ -178,7 +178,7 @@ const documentsBody = (s) => `
 
 const planBody = (s, plans) => `
   <h3 style="font-size:15px;margin:0 0 1rem;">Choose your membership plan</h3>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
     ${field("onb-plan", "Membership plan", `
       <select id="onb-plan" required style="${FLD}">
         <option value="">Choose a plan…</option>
@@ -218,7 +218,7 @@ const seatBody = () => `
 
 const paymentBody = (s, plan, amount) => `
   <h3 style="font-size:15px;margin:0 0 1rem;">Payment</h3>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;">
+  <div class="onb-pay-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;">
     <label id="onb-pay-later-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1rem;cursor:pointer;background:rgba(255,255,255,.02);">
       <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
         <input type="radio" name="onb-paymethod" id="onb-pay-later" value="Pay Later" ${s.paymentMethod === "Pay Later" || !s.paymentMethod ? "checked" : ""} />
@@ -316,7 +316,7 @@ export const showWizardLoading = (container) => {
     <div class="card" style="padding:1.75rem;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);">
       <div class="onb-skel" style="height:30px;width:64%;border-radius:999px;background:var(--bg-hover);margin-bottom:1.5rem;"></div>
       ${[0, 1, 2, 3].map(() => `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
+        <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
           <div class="onb-skel" style="height:46px;border-radius:8px;background:var(--bg-hover);"></div>
           <div class="onb-skel" style="height:46px;border-radius:8px;background:var(--bg-hover);"></div>
         </div>`).join("")}
@@ -337,6 +337,7 @@ export const paintWizardSidebar = (state, student, documents, plan) => {
   const nav = document.querySelector(".sidebar-nav");
   if (!nav) return;
   if (savedNavHtml === null) savedNavHtml = nav.innerHTML;
+  document.getElementById("mobile-bottom-nav")?.style.setProperty("display", "none", "important");
 
   const done = stepDoneMap(state, student, documents, plan);
   const active = WIZARD_STEPS.findIndex((s) => s.key === state);
@@ -383,6 +384,7 @@ export const restoreSidebar = () => {
     nav.innerHTML = savedNavHtml;
     savedNavHtml = null;
   }
+  document.getElementById("mobile-bottom-nav")?.style.removeProperty("display");
 };
 
 export const renderOnboarding = async (opts) => {
@@ -522,8 +524,8 @@ export const renderOnboarding = async (opts) => {
       // card deliberately has no camera / Take Selfie button (file picker only).
       initDocumentUploads("onb-shot-docs", {
         keys: ["paymentScreenshot"],
-        title: "Payment screenshot (file upload only — no camera)",
-        note: "(required when paying now)"
+        title: "Payment Screenshot (Required)",
+        note: "(Required · 1 screenshot proof)"
       });
       window.__onbGetFiles = getSelectedDocumentFiles;
       window.__onbUploadFiles = uploadAdmissionDocuments;
@@ -600,23 +602,18 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       if (phone.length !== 10) return toast("Please enter a valid 10-digit mobile number.", "warning");
       if (!dob) return toast("Please enter your date of birth.", "warning");
       if (!gender) return toast("Please select your gender.", "warning");
-      if (!college) return toast("Please enter your college / institute.", "warning");
-      if (!course) return toast("Please enter your course.", "warning");
-      if (!address) return toast("Please enter your address.", "warning");
 
-      // Every field on this step is mandatory — nothing is optional.
+      // Parent mobile is optional — only validate format if provided
       const parentPhone = val("onb-parent-phone").replace(/\D/g, "");
-      const email = val("onb-email").trim().toLowerCase();
-      const remarks = val("onb-remarks").trim();
+      if (parentPhone) {
+        if (parentPhone.length !== 10) return toast("Parent mobile number must be exactly 10 digits (or leave it blank).", "warning");
+        if (parentPhone === phone) return toast("Parent's mobile number must be different from your own number.", "warning");
+      }
 
-      if (parentPhone.length !== 10) return toast("Please enter a valid 10-digit parent mobile number.", "warning");
-      // The parent number is the contact we use when the student can't be
-      // reached — it has to reach somebody else (owner: "block same parent
-      // and student number").
-      if (parentPhone === phone) return toast("Parent's mobile number must be different from your own number.", "warning");
+      const email = val("onb-email").trim().toLowerCase();
       if (!email) return toast("Please enter your email address.", "warning");
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Please enter a valid email address.", "warning");
-      if (!remarks) return toast("Please enter your remarks / exam goal.", "warning");
+      const remarks = val("onb-remarks").trim();
 
       setBusy(true, "Saving…");
       const res = await saveDetails(id, {

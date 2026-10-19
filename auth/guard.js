@@ -87,6 +87,18 @@ export const initAuthGuard = () => {
         }
 
         if (isPublicPage) {
+          let userDocRevokeCheck = null;
+          try {
+            userDocRevokeCheck = await getDocument("students", user.uid);
+            if (!userDocRevokeCheck) userDocRevokeCheck = await getDocument("users", user.uid);
+          } catch (_) {}
+          if (userDocRevokeCheck && userDocRevokeCheck.loginRevoked === true) {
+            localStorage.removeItem("userRole");
+            localStorage.removeItem("userId");
+            await logout();
+            if (loader) loader.style.display = "none";
+            return;
+          }
           // Redirect logged-in users away from login page to their dashboard
           window.location.href = getRedirectUrlForRole(role);
         } else {
@@ -100,9 +112,11 @@ export const initAuthGuard = () => {
             if (!userDoc2) userDoc2 = await getDocument("users", user.uid);
           } catch (_) { }
 
-          if (userDoc2 && (userDoc2.status === "disabled" || userDoc2.status === "Inactive" || userDoc2.status === "Old" || userDoc2.status === "Old Student")) {
-            localStorage.setItem("forceUnauthorized", "true");
+          if (userDoc2 && (userDoc2.loginRevoked === true || userDoc2.status === "disabled" || userDoc2.status === "Inactive" || userDoc2.status === "Old" || userDoc2.status === "Old Student")) {
+            localStorage.removeItem("userRole");
+            localStorage.removeItem("userId");
             await logout();
+            window.location.href = "/login.html";
             return;
           }
 
@@ -167,8 +181,12 @@ export const initAuthGuard = () => {
         if (loader) loader.style.display = "none";
         return;
       }
-      // Protected page: wait for session restore before bouncing.
-      // If a user arrives within the window, the timer is cancelled above.
+      // Protected page: if no role is cached, bounce immediately without showing UI
+      if (!localStorage.getItem("userRole")) {
+        localStorage.removeItem("userId");
+        window.location.href = "/login.html";
+        return;
+      }
       if (__nullTimer) return;
       __nullTimer = setTimeout(() => {
         __nullTimer = null;
@@ -183,7 +201,7 @@ export const initAuthGuard = () => {
 
         // Student-only copy: everything goes to normal login.
         window.location.href = "/login.html";
-      }, 1200);
+      }, 800);
       return;
     }
   });

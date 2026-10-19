@@ -10,15 +10,15 @@ export const validateStudentData = async (data) => {
   if (!data.name || data.name.trim() === "") throw new Error("Full Name is required.");
   if (!data.phone || data.phone.trim() === "") throw new Error("Phone Number is required.");
 
-  // Owner rule: the parent's mobile may NEVER be the student's own number —
-  // it is the fallback contact we use when the student cannot be reached, so
-  // it has to reach somebody else. Digits only, 10 like every other number.
+  // Parent's mobile, college, and address are completely optional.
+  // Only validate parent's phone format if a non-empty value was actually entered.
   const digits = (v) => String(v || "").replace(/\D/g, "");
   const ownPhone = digits(data.phone);
-  const parentPhone = digits(data.parentPhone);
-  if (parentPhone) {
+  const rawParent = String(data.parentPhone || "").trim();
+  const parentPhone = digits(rawParent);
+  if (rawParent && parentPhone && !["na", "none", "null", "-"].includes(rawParent.toLowerCase())) {
     if (parentPhone.length !== 10) {
-      throw new Error("Parent's mobile number must be exactly 10 digits.");
+      throw new Error("Parent's mobile number must be exactly 10 digits (or leave it blank).");
     }
     if (parentPhone === ownPhone) {
       throw new Error("Parent's mobile number cannot be the same as the student's own number.");
@@ -50,20 +50,19 @@ export const validateStudentData = async (data) => {
 
   // Duplicate checks.
   //
-  // 1) FIRST: the "one request per phone/email" claim. This is the ONE place
-  //    a student is always allowed to read, so unlike the collection query in
-  //    step 2 it can never be skipped. Before this existed, a student
-  //    submission hit permission-denied on `students`, the error was swallowed
-  //    below, and the same number could send request after request.
-  const normEmail = data.email ? String(data.email).trim().toLowerCase() : "";
-  await checkRequestNotAlreadyFiled(data.phone, normEmail);
+  // 1) FIRST: the "one request per phone/email" claim. Readable by any
+  //    signed-in user, so unlike the collection query in step 2 it can never
+  //    be silently skipped — that is exactly how the same number used to be
+  //    able to file request after request.
+  await checkRequestNotAlreadyFiled(data.phone, data.email);
 
-  // 2) Then the full collection scan. Admin submissions AND website/student
-  //    submissions both get checked so the same phone number or email can
-  //    never exist twice. For student self-submissions the student's own
-  //    pending record (same uid) is excluded. Students may only read their own
-  //    doc per Firestore rules, so a permission failure here is tolerated —
-  //    step 1 and the admin-side approval re-check still hold the line.
+  // 2) Then the full collection scan over 'students' and 'admissions'. Admin
+  //    submissions AND website/student submissions both get checked so the
+  //    same phone number or email can never exist twice. For student
+  //    self-submissions the student's own pending record (same uid) is
+  //    excluded. Students may only read their own doc per Firestore rules, so
+  //    a permission failure here is tolerated — step 1 and the admin-side
+  //    approval re-check still hold the line.
   const isStudent = !!data.isStudentSubmission;
   try {
     await checkDuplicates(data.phone, data.email, isStudent ? data.uid || data._selfUid || null : null);
@@ -94,12 +93,10 @@ const readClaim = async (id) => {
  */
 export const checkRequestNotAlreadyFiled = async (phone, email) => {
   const normEmail = email ? String(email).trim().toLowerCase() : "";
-  if (phone) {
-    if (await readClaim(`req_adm_${phone}`)) {
-      throw new Error(
-        `We already have a request from ${phone} — no second one can be filed. We'll call you.`
-      );
-    }
+  if (phone && await readClaim(`req_adm_${phone}`)) {
+    throw new Error(
+      `We already have a request from ${phone} — no second one can be filed. We'll call you.`
+    );
   }
   if (normEmail && await readClaim(`req_admmail_${normEmail}`)) {
     throw new Error(
