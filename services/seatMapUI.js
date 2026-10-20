@@ -166,7 +166,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
 
         return `
           <div
-            onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable})"
+            onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable}, '${seat.floor || signupCurrentFloor}')"
             title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
             style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
                    border-radius:10px; height:${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; box-sizing:border-box; display:flex; align-items:center;
@@ -227,7 +227,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
 
           return `
             <div
-              onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable})"
+              onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable}, '${seat.floor || signupCurrentFloor}')"
               title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
               style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
                      border-radius:10px; height:52px; display:flex; align-items:center;
@@ -336,7 +336,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       renderSignupSeats();
     };
 
-    window._signupSelectSeat = (seatId, seatNumber, isPickable) => {
+    window._signupSelectSeat = (seatId, seatNumber, isPickable, floor) => {
       if (!isPickable) {
         window.showToast && window.showToast(
         isCheckinContext
@@ -346,16 +346,20 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         return;
       }
       signupSelectedId = seatId;
+      const pickedFloor = floor || signupCurrentFloor || "Ground Floor";
       // Write into the OPEN dialog's inputs first (check-in and seat-change
       // modals reuse the same input ids) — document fallback keeps the
       // non-dialog onboarding flow working.
       const scope = document.querySelector("dialog[open]") || document;
       const numInput = (scope.querySelector && scope.querySelector("#selectedSeatNumber")) || document.getElementById("selectedSeatNumber");
       const idInput = (scope.querySelector && scope.querySelector("#selectedSeatId")) || document.getElementById("selectedSeatId");
+      const floorInput = (scope.querySelector && (scope.querySelector("#selectedSeatFloor") || scope.querySelector("#seatFloor"))) || document.getElementById("selectedSeatFloor") || document.getElementById("seatFloor");
       if (numInput) numInput.value = seatNumber;
       if (idInput)  idInput.value  = seatId;
+      if (floorInput) floorInput.value = pickedFloor;
+      window.selectedSeatFloor = pickedFloor;
       const label = (scope.querySelector && scope.querySelector("#signup-selected-label")) || document.getElementById("signup-selected-label");
-      if (label) label.innerHTML = `<span style="color:#166534; font-weight:600;">✓ Seat ${seatNumber} selected</span>`;
+      if (label) label.innerHTML = `<span style="color:#166534; font-weight:600;">✓ Seat ${seatNumber} (${pickedFloor}) selected</span>`;
       renderSignupSeats();
     };
 

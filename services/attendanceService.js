@@ -106,7 +106,7 @@ const validateCheckIn = async (student, selectedSeatNumber) => {
   return finalSeat;
 };
 
-export const checkIn = async (student, selectedSeatNumber = null) => {
+export const checkIn = async (student, selectedSeatNumber = null, selectedSeatFloor = null) => {
   let finalSeat = null;
   try {
     finalSeat = await validateCheckIn(student, selectedSeatNumber);
@@ -115,6 +115,13 @@ export const checkIn = async (student, selectedSeatNumber = null) => {
   }
 
   try {
+    const rawSel = String(selectedSeatNumber || "").trim().toUpperCase();
+    const floorHint = selectedSeatFloor || (rawSel.startsWith("B") || rawSel.endsWith("B")
+      ? "First Floor"
+      : (rawSel.startsWith("A") || rawSel.endsWith("A")
+          ? "Ground Floor"
+          : ((student && student.seatFloor) || "Ground Floor")));
+
     // Verify seat is available (or reserved — first come, first served)
     let seatSnap;
     try {
@@ -124,14 +131,21 @@ export const checkIn = async (student, selectedSeatNumber = null) => {
       if (isPermissionError(e)) return { success: false, error: permissionHint() };
       throw e;
     }
-    if (seatSnap.empty) return { success: false, error: `Seat ${finalSeat} not found. Please pick another seat.` };
+    if (seatSnap.empty) return { success: false, error: `Seat ${finalSeat} (${floorHint}) not found. Please pick another seat.` };
 
-    const seatDoc = seatSnap.docs[0];
-    const seatData = seatDoc.data();
+    const isFirst = floorHint.toLowerCase().includes("first") || floorHint.startsWith("B");
+    const seatDoc = (seatSnap.docs.length > 1
+      ? (seatSnap.docs.find(d => {
+          const df = String((d.data() || {}).floor || "").toLowerCase();
+          return isFirst ? (df.includes("first") || d.id.startsWith("b")) : (df.includes("ground") || d.id.startsWith("a"));
+        }) || seatSnap.docs[0])
+      : seatSnap.docs[0]);
+    const seatData = seatDoc.data() || {};
+    const resolvedFloor = seatData.floor || floorHint || (student && student.seatFloor) || "Ground Floor";
 
-    if (seatData.status === "Occupied") return { success: false, error: `Seat ${finalSeat} is already occupied. Please pick another seat.` };
-    if (seatData.status === "Pending") return { success: false, error: `Seat ${finalSeat} has a pending seat-change request. Please pick another seat.` };
-    if (seatData.status === "Maintenance" || seatData.status === "Inactive") return { success: false, error: `Seat ${finalSeat} is under maintenance. Please pick another seat.` };
+    if (seatData.status === "Occupied") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is already occupied. Please pick another seat.` };
+    if (seatData.status === "Pending") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) has a pending seat-change request. Please pick another seat.` };
+    if (seatData.status === "Maintenance" || seatData.status === "Inactive") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is under maintenance. Please pick another seat.` };
     // Reserved seats are freely pickable — first come, first served. The
     // assignment only decides which status the seat reverts to on check-out.
 
@@ -140,6 +154,7 @@ export const checkIn = async (student, selectedSeatNumber = null) => {
       studentId: student.id,
       studentName: student.name,
       seatNumber: finalSeat, // The actual seat they are taking
+      seatFloor: resolvedFloor,
       planName: student.planName || "",
       date: getTodayStr(),
       checkIn: now.getTime(),

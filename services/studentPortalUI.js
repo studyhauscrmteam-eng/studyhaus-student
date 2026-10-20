@@ -238,7 +238,7 @@ export const initStudentPortalUI = () => {
 
   // Shared check-in executor — used by the seat-picker modal AND the direct
   // assigned-seat path. Manages the visible button and toasts.
-  const runCheckIn = async (selectedSeatNumber) => {
+  const runCheckIn = async (selectedSeatNumber, selectedSeatFloor = null) => {
     const modal = document.getElementById("checkin-seat-modal");
     const btn = (modal && modal.open)
       ? document.getElementById("btn-confirm-checkin")
@@ -247,7 +247,7 @@ export const initStudentPortalUI = () => {
     if (btn) { btn.innerHTML = "Processing..."; btn.disabled = true; }
 
     try {
-      const res = await checkIn(currentStudent, selectedSeatNumber);
+      const res = await checkIn(currentStudent, selectedSeatNumber, selectedSeatFloor);
       if (!res.success) {
         window.showToast("Check-In Failed: " + res.error, "error");
       } else if (res.warning) {
@@ -312,6 +312,7 @@ export const initStudentPortalUI = () => {
     const getVal = (id) => (modal && modal.querySelector("#" + id)?.value) || document.getElementById(id)?.value || "";
     const selectedSeatId = getVal("selectedSeatId");
     const selectedSeatNumber = getVal("selectedSeatNumber");
+    const selectedSeatFloor = getVal("selectedSeatFloor") || window.selectedSeatFloor || null;
 
     if (!selectedSeatId || !selectedSeatNumber) {
       window.showToast("Please select a seat from the map to check in.", "warning");
@@ -322,7 +323,7 @@ export const initStudentPortalUI = () => {
       return;
     }
 
-    await runCheckIn(selectedSeatNumber);
+    await runCheckIn(selectedSeatNumber, selectedSeatFloor);
   };
 
   // Handle Check-out
@@ -623,6 +624,7 @@ window.handlePaymentSubmit = async () => {
         <div style="padding:1.25rem 1.5rem;">
           <div id="seat-change-selection-section" style="border:1px solid var(--border-bright); border-radius:12px; padding:1rem;"></div>
           <input type="hidden" id="selectedSeatNumber" />
+          <input type="hidden" id="selectedSeatFloor" />
           <input type="hidden" id="selectedSeatId" />
           <div id="signup-selected-label" style="margin-top:0.6rem; font-size:13px; color:var(--text-secondary); min-height:20px;"></div>
           <div class="form-group" style="margin-top:0.75rem;">
@@ -1113,7 +1115,7 @@ const seatRequestsCardHtml = (s) => {
     const decided = r.status !== "Pending" && r.decidedAt
       ? ` <span style="color:var(--text-muted); font-size:11px;">· decided${r.decisionReason ? `: ${esc(r.decisionReason)}` : ""}</span>` : "";
     return `<div style="font-size:12.5px; color:var(--text-secondary); padding:6px 0; border-top:1px solid var(--border);">
-      Seat ${esc(r.fromSeat || "?")} → <strong style="color:var(--text-primary);">${esc(r.toSeat || "?")}</strong>
+      Seat ${esc(r.fromSeat || "?")} (${esc(r.fromFloor || "Ground Floor")}) → <strong style="color:var(--text-primary);">Seat ${esc(r.toSeat || "?")} (${esc(r.toFloor || "Ground Floor")})</strong>
       <span class="badge ${badge}" style="margin-left:6px;">${esc(r.status || "Pending")}</span>${decided}${cancel}</div>`;
   }).join("");
   return `
@@ -1123,7 +1125,7 @@ const seatRequestsCardHtml = (s) => {
       </div>
       <div style="font-size:13px; color:var(--text-secondary);">
         ${s.seatNumber
-          ? `Your fixed seat: <strong style="color:var(--text-primary); font-size:1.1rem;">${esc(s.seatNumber)}</strong>${pending.length ? ` · <span style="color:var(--warning, #b45309);">${pending.length} change request${pending.length > 1 ? "s" : ""} waiting for approval</span>` : ""}`
+          ? `Your fixed seat: <strong style="color:var(--text-primary); font-size:1.1rem;">Seat ${esc(s.seatNumber)} (${esc(s.seatFloor || 'Ground Floor')})</strong>${pending.length ? ` · <span style="color:var(--warning, #b45309);">${pending.length} change request${pending.length > 1 ? "s" : ""} waiting for approval</span>` : ""}`
           : "No fixed seat on your plan."}
       </div>
       ${rows ? `<div style="margin-top:0.5rem;">${rows}</div>` : ""}
@@ -1713,7 +1715,11 @@ const renderPortal = () => {
     }
     const checkinSince = activeSession && activeSession.checkIn
       ? new Date(activeSession.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-    const seatLabel = activeSession ? (activeSession.seatNumber || "—") : (s.seatNumber || "Not assigned");
+    const assignedSeat = s.seatNumber || s.seatAssigned || "";
+    const assignedFloor = s.seatFloor || s.floor || (assignedSeat ? "Ground Floor" : "");
+    const seatLabel = activeSession
+      ? `${activeSession.seatNumber || "—"} (${activeSession.seatFloor || assignedFloor || "Ground Floor"})`
+      : (assignedSeat ? `${assignedSeat} (${assignedFloor})` : "Not assigned");
     const dueLabel = s.paymentDueDate
       ? new Date(s.paymentDueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "N/A";
     const dueUrgent = daysRemaining <= 5;
@@ -1753,7 +1759,7 @@ const renderPortal = () => {
           <div>
             <div class="metric-label">Right now</div>
             <div class="metric-value" style="font-size:1.15rem;">${activeSession ? "Checked in" : "Not checked in"}</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: ${s.seatNumber}` : "Pick any free seat at check-in")}</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: Seat ${s.seatNumber} (${s.seatFloor || 'Ground Floor'})` : "Pick any free seat at check-in")}</div>
             ${canChangeSeat ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="margin-top:6px; font-size:0.75rem;">Change seat</button>` : ""}
           </div>
         </div>
@@ -1798,7 +1804,7 @@ const renderPortal = () => {
           ${openComplaints.length
             ? `<div style="font-size:0.85rem; color:var(--text-secondary);">${openComplaints.length} open complaint${openComplaints.length > 1 ? "s" : ""} — <a href="#" onclick="navigate('student-complaints'); return false;" style="color:var(--primary);">track here</a>.</div>`
             : lastSession
-              ? `<div style="font-size:0.85rem; color:var(--text-muted);">Last visit: ${lastSession.date || "—"}${lastSession.seatNumber ? ` · Seat ${lastSession.seatNumber}` : ""} · ${lastSession.duration ? lastSession.duration + "h" : "—"}.</div>`
+              ? `<div style="font-size:0.85rem; color:var(--text-muted);">Last visit: ${lastSession.date || "—"}${lastSession.seatNumber ? ` · Seat ${lastSession.seatNumber} (${lastSession.seatFloor || 'Ground Floor'})` : ""} · ${lastSession.duration ? lastSession.duration + "h" : "—"}.</div>`
               : ""}
         </div>
       </div>
@@ -1828,6 +1834,7 @@ const renderPortal = () => {
         <div style="padding: 1.25rem 1.5rem;">
           <div id="checkin-seat-selection-section" style="border: 1px solid var(--border-bright); border-radius: 12px; padding: 1rem;"></div>
           <input type="hidden" id="selectedSeatNumber" />
+          <input type="hidden" id="selectedSeatFloor" />
           <input type="hidden" id="selectedSeatId" />
           <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-top: 1rem; flex-wrap:wrap;">
             <span style="font-size:12.5px; color:var(--text-muted);">Occupied &amp; maintenance seats can't be picked.</span>
@@ -1843,6 +1850,9 @@ const renderPortal = () => {
 
   // Compute unpaid months before building the payment form
   const { monthsOwed: _monthsOwed, nextMonthLabel: _nextMonthLabel, nextStartStr: _nextStartStr, nextEndStr: _nextEndStr } = computeUnpaidMonths(s.paymentDueDate);
+  const renewSeatVal = s.seatNumber || s.seatAssigned || "";
+  const renewFloorVal = s.seatFloor || s.floor || (renewSeatVal ? "Ground Floor" : "");
+  const renewSeatText = renewSeatVal ? ` · Seat ${renewSeatVal} (${renewFloorVal})` : "";
 
   // 2. PAYMENTS PAGE
   document.getElementById("page-student-payments").innerHTML = `
@@ -1883,7 +1893,7 @@ const renderPortal = () => {
                   : `<div class="avatar" style="width: 50px; height: 50px; background: var(--primary); font-size: 1.2rem;">${initials}</div>`}
                 <div>
                   <h4>${s.name}</h4>
-                  <div class="sp-idcard-sub">Phone: ${s.phone || "—"}${s.seatNumber ? ` · Seat ${s.seatNumber}` : ""}</div>
+                  <div class="sp-idcard-sub">Phone: ${s.phone || "—"}${renewSeatText}</div>
                 </div>
               </div>
 

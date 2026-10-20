@@ -538,7 +538,7 @@ const stripSeatPlain = (v) => {
   return m ? String(Number(m[1])) : raw;
 };
 
-const resolveSeatRef = async (seatNumber, seatId) => {
+const resolveSeatRef = async (seatNumber, seatId, seatFloorHint = null) => {
   if (seatId) {
     try {
       const direct = await getDoc(doc(db, "seats", seatId));
@@ -546,18 +546,24 @@ const resolveSeatRef = async (seatNumber, seatId) => {
     } catch (_) { /* fall through to number lookup */ }
   }
   const plain = stripSeatPlain(seatNumber);
+  const targetFloor = seatFloorHint ? String(seatFloorHint).toLowerCase() : null;
   for (const key of [plain, `A${plain}`, `B${plain}`]) {
     const s = await getDocs(query(collection(db, "seats"), where("seatNumber", "==", key)));
     for (const d of s.docs) {
-      if (stripSeatPlain((d.data() || {}).seatNumber) === plain) return d.ref;
+      if (stripSeatPlain((d.data() || {}).seatNumber) === plain) {
+        if (!targetFloor) return d.ref;
+        const df = String((d.data() || {}).floor || "").toLowerCase();
+        if (targetFloor.includes("first") && (df.includes("first") || d.id.startsWith("first") || d.id.startsWith("b"))) return d.ref;
+        if (targetFloor.includes("ground") && (df.includes("ground") || d.id.startsWith("ground") || d.id.startsWith("a"))) return d.ref;
+      }
     }
   }
   return null;
 };
 
-export const reserveSeat = async (studentId, seatNumber, studentName, seatId) => {
+export const reserveSeat = async (studentId, seatNumber, studentName, seatId, seatFloorHint = null) => {
   try {
-    const seatRef = await resolveSeatRef(seatNumber, seatId);
+    const seatRef = await resolveSeatRef(seatNumber, seatId, seatFloorHint);
     if (!seatRef) throw new Error("That seat no longer exists.");
     await runTransaction(db, async (tx) => {
       const seatSnap = await tx.get(seatRef);
@@ -568,7 +574,7 @@ export const reserveSeat = async (studentId, seatNumber, studentName, seatId) =>
       const free =
         seat.status === "Available" ||
         seat.status === "Reserved" && seat.assignedStudentId === uid;
-      if (!free) throw new Error(`Seat ${seatNumber} was just taken. Please pick another.`);
+      if (!free) throw new Error(`Seat ${seatNumber} (${seat.floor || seatFloorHint || 'Ground Floor'}) was just taken. Please pick another.`);
 
       tx.update(seatRef, {
         status: "Reserved",
@@ -579,7 +585,7 @@ export const reserveSeat = async (studentId, seatNumber, studentName, seatId) =>
       tx.update(doc(db, "students", studentId), {
         seatNumber: seat.seatNumber || seatNumber,
         seatId: seatRef.id,
-        seatFloor: (seat.floor || "Ground Floor"),
+        seatFloor: (seat.floor || seatFloorHint || "Ground Floor"),
         updatedAt: serverTimestamp()
       });
     });

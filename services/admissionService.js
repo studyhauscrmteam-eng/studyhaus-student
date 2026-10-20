@@ -420,36 +420,50 @@ export const initAdmissionsUI = async () => {
     }
   }
 
-  // Populate seats dropdown
+  // Populate seats dropdown — plain numbers grouped by floor
   const seatSelect = document.getElementById("adm-seat");
   if (seatSelect) {
     seatSelect.innerHTML = "<option value=''>Loading...</option>";
     try {
       const q = query(collection(db, "seats"), where("status", "==", "Available"));
       const snap = await getDocs(q);
-      let validSeats = [];
-      snap.forEach(doc => {
-        const s = doc.data();
-        if (s.seatNumber && String(s.seatNumber).trim() !== "" && String(s.seatNumber) !== "undefined") {
-          const seatStr = String(s.seatNumber).trim();
-          const match = seatStr.match(/^([AB])(\d+)$/i);
-          if (match) {
-            const prefix = match[1].toUpperCase();
-            const number = Number(match[2]);
-            const maxNumber = prefix === "A" ? 68 : 40;
-            if (number >= 1 && number <= maxNumber) {
-              validSeats.push(`${prefix}${String(number).padStart(2, "0")}`);
-            }
-          }
+      const stripToPlain = (v) => {
+        const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+        const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+        return m ? String(Number(m[1])) : "";
+      };
+      const byFloor = { "Ground Floor": [], "First Floor": [] };
+      snap.forEach(d => {
+        const s = d.data() || {};
+        const plain = stripToPlain(s.seatNumber);
+        if (!plain) return;
+        const floor = s.floor || "Ground Floor";
+        const maxN = floor === "First Floor" ? 40 : 68;
+        const n = Number(plain);
+        if (!(n >= 1 && n <= maxN)) return;
+        if (!byFloor[floor]) byFloor[floor] = [];
+        byFloor[floor].push({ id: d.id, num: plain, floor });
+      });
+      const sortNum = (a, b) => Number(a.num) - Number(b.num);
+      Object.values(byFloor).forEach(arr => {
+        const seen = new Set();
+        arr.sort(sortNum);
+        for (let i = arr.length - 1; i >= 0; i--) {
+          if (seen.has(arr[i].num)) arr.splice(i, 1);
+          else seen.add(arr[i].num);
         }
       });
-      
-      validSeats = [...new Set(validSeats)].sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
-      
-      let html = `<option value=''>${validSeats.length} available</option>`;
-      validSeats.forEach(seat => {
-        html += `<option value="${seat}">${seat}</option>`;
-      });
+      const total = (byFloor["Ground Floor"] || []).length + (byFloor["First Floor"] || []).length;
+      let html = `<option value=''>${total} available</option>`;
+      for (const floor of ["Ground Floor", "First Floor"]) {
+        const arr = byFloor[floor] || [];
+        if (!arr.length) continue;
+        html += `<optgroup label="${floor} — ${arr.length} free">`;
+        arr.forEach(({ id, num }) => {
+          html += `<option value="${id}">${floor} · Seat ${num}</option>`;
+        });
+        html += `</optgroup>`;
+      }
       seatSelect.innerHTML = html;
     } catch (e) {
       seatSelect.innerHTML = "<option value=''>Failed to load seats</option>";
@@ -632,19 +646,30 @@ export const initAdmissionsUI = async () => {
       
       const planId = planEl.value;
       const plan = availablePlansList.find(p => p.id === planId);
-      const selectedSeatNumber = seatEl?.value || "";
+      const selectedSeatId = seatEl?.value || "";
 
       let selectedSeat = null;
-      if (selectedSeatNumber) {
-        const availableSeats = await getDocs(query(collection(db, "seats"), where("status", "==", "Available")));
-        selectedSeat = availableSeats.docs.find(seatDoc => {
-          const seatValue = String(seatDoc.data().seatNumber || "").match(/^([AB])(\d+)$/i);
-          if (!seatValue) return false;
-          return `${seatValue[1].toUpperCase()}${String(Number(seatValue[2])).padStart(2, "0")}` === selectedSeatNumber;
-        });
+      let selectedSeatNumber = "";
+      let selectedSeatFloor = "";
+      if (selectedSeatId) {
+        try {
+          const direct = await getDoc(doc(db, "seats", selectedSeatId));
+          if (direct.exists() && (direct.data() || {}).status === "Available") {
+            selectedSeat = direct;
+          }
+        } catch (_) {}
+        if (!selectedSeat) {
+          const availableSeats = await getDocs(query(collection(db, "seats"), where("status", "==", "Available")));
+          selectedSeat = availableSeats.docs.find(seatDoc => seatDoc.id === selectedSeatId) || null;
+        }
         if (!selectedSeat) {
           throw new Error("That seat is no longer available. Please choose another seat.");
         }
+        const sd = selectedSeat.data() || {};
+        const raw = String(sd.seatNumber || "").trim().toUpperCase().replace(/\s+/g, "");
+        const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+        selectedSeatNumber = m ? String(Number(m[1])) : String(sd.seatNumber || "");
+        selectedSeatFloor = sd.floor || "Ground Floor";
       }
 
       const data = {
@@ -673,6 +698,8 @@ export const initAdmissionsUI = async () => {
         planName: plan ? plan.planName : "",
         seatAssigned: selectedSeatNumber,
         seatNumber: selectedSeatNumber,
+        seatFloor: selectedSeatFloor,
+        seatId: selectedSeatId || "",
         paymentMethod: isAdminOrManager ? (overridePaymentMethod || "Admin Created") : "Pending",
         termsAccepted: true
       };

@@ -213,6 +213,7 @@ const seatBody = () => `
   ${seatLegend()}
   <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:1rem;min-height:220px;background:var(--bg-hover);"></div>
   <input type="hidden" id="selectedSeatNumber" />
+  <input type="hidden" id="selectedSeatFloor" />
   <input type="hidden" id="selectedSeatId" />
   <p id="onb-seat-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>`;
 
@@ -683,14 +684,15 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
     /* --------------------------------------------------------------- seat */
     if (state === STATE.SEAT) {
       const seatNumber = val("selectedSeatNumber");
+      const seatFloor = val("selectedSeatFloor") || window.selectedSeatFloor || "Ground Floor";
       if (!seatNumber) return toast("Please select a seat from the map.", "warning");
 
       setBusy(true, "Reserving…");
-      const res = await reserveSeat(id, seatNumber, student.name || "", val("selectedSeatId"));
+      const res = await reserveSeat(id, seatNumber, student.name || "", val("selectedSeatId"), seatFloor);
       setBusy(false);
       if (!res.success) return toast(res.error, "error");
 
-      toast(`Seat ${seatNumber} reserved for you.`, "success");
+      toast(`Seat ${seatNumber} (${seatFloor}) reserved for you.`, "success");
       return onAdvance(STATE.PAYMENT);
     }
 

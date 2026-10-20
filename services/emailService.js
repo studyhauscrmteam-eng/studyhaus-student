@@ -71,7 +71,7 @@ export const sendAdmissionApprovedMail = (student) => {
     html: layout("Admission approved", [
       `Hi <b>${escapeHtml(student.name || "Student")}</b>,`,
       `Good news! Your admission has been <b style="color:#059669;">approved</b>.`,
-      `Admission number: <b>${escapeHtml(student.studentId || "—")}</b> · Seat: <b>${escapeHtml(student.seatNumber || "to be assigned")}</b> · Plan: <b>${escapeHtml(student.planName || "—")}</b>`,
+      `Admission number: <b>${escapeHtml(student.studentId || "—")}</b> · Seat: <b>${escapeHtml(student.seatNumber ? `${student.seatNumber} (${student.seatFloor || 'Ground Floor'})` : "to be assigned")}</b> · Plan: <b>${escapeHtml(student.planName || "—")}</b>`,
       student.loginId
         ? `You can sign in to the student portal with Login ID <b>${escapeHtml(student.loginId)}</b>.`
         : `Please contact the desk for your portal login details.`,
