@@ -24,22 +24,27 @@ export const submitComplaint = async (student, category, description) => {
     const sPlan = studentObj.planName || 'Unknown';
 
     let seatNumber = studentObj.seatNumber || studentObj.seatAssigned || '';
+    let seatFloor = studentObj.seatFloor || studentObj.floor || '';
     if (sId) {
       try {
         const activeQ = query(collection(db, 'attendance'),
           where('studentId', '==', sId), where('status', '==', 'Active'));
         const activeSnap = await getDocs(activeQ);
         if (!activeSnap.empty) {
-          seatNumber = activeSnap.docs[0].data().seatNumber || seatNumber;
+          const actData = activeSnap.docs[0].data() || {};
+          seatNumber = actData.seatNumber || seatNumber;
+          seatFloor = actData.seatFloor || seatFloor;
         }
       } catch (_) { /* seat is optional context on a complaint */ }
     }
+    if (!seatFloor && seatNumber) seatFloor = 'Ground Floor';
 
     const complaintData = {
       studentId: sId,
       studentName: sName,
       studentPhone: sPhone,
       seatNumber: seatNumber || '',
+      seatFloor: seatFloor || '',
       planName: sPlan,
       category: finalCategory,
       description: String(description || '').trim(),
@@ -51,7 +56,28 @@ export const submitComplaint = async (student, category, description) => {
       complaintData.uid = authUid;
     }
 
-    await addDoc(collection(db, 'complaints'), complaintData);
+    const complaintRef = await addDoc(collection(db, 'complaints'), complaintData);
+
+    try {
+      const seatDisp = seatNumber ? ` (Seat ${seatNumber}${seatFloor ? ` - ${seatFloor}` : ''})` : '';
+      await addDoc(collection(db, 'notifications'), {
+        type: 'complaint',
+        title: `Complaint: ${finalCategory}`,
+        body: `${sName}${seatDisp}: ${String(description || '').trim()}`,
+        complaintId: complaintRef.id,
+        studentId: sId,
+        studentName: sName,
+        studentPhone: sPhone,
+        seatNumber: seatNumber || '',
+        seatFloor: seatFloor || '',
+        category: finalCategory,
+        read: false,
+        forRoles: ['Owner/Admin', 'Manager'],
+        createdAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.warn('[complaint] notification creation failed:', e);
+    }
     
     return { success: true };
   } catch (error) {

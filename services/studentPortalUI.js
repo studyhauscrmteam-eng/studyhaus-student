@@ -959,11 +959,20 @@ const renderStudentNotifications = () => {
       <div class="notif-body">Since ${active.checkIn ? new Date(active.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "today"}. Don't forget to check out when you leave.</div></div></div>`;
   }
 
-  // Only announcements whose schedule has arrived (no date = immediate).
+  // Only announcements whose schedule has arrived and are within 1 day (24h) of being announced.
   const annLive = (a) => {
-    if (!a || !a.scheduledFor) return true;
+    if (!a) return false;
+    const now = Date.now();
+    let annTime = null;
+    if (a.scheduledFor) {
+      const t = new Date(a.scheduledFor).getTime();
+      if (!Number.isNaN(t)) annTime = t;
+    }
+    if (!annTime && a.createdAt?.seconds) annTime = a.createdAt.seconds * 1000;
+    if (annTime && (now - annTime) >= 24 * 60 * 60 * 1000) return false; // auto gone after 1 day
+    if (!a.scheduledFor) return true;
     const t = new Date(a.scheduledFor).getTime();
-    return Number.isNaN(t) || t <= Date.now();
+    return Number.isNaN(t) || t <= now;
   };
   const visible = studentAnnouncements.filter(a => {
     if (!annLive(a)) return false;
