@@ -3427,6 +3427,55 @@ select option:checked {
   display: none;
 }
 
+/* ============ SEAT LEGEND CHIPS (Dark & Light Theme Adaptive) ============ */
+.seat-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: all 0.15s ease;
+}
+.seat-legend-chip.avail {
+  background: rgba(34, 197, 94, 0.16);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.seat-legend-chip.occ {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.seat-legend-chip.res {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.seat-legend-chip.sel {
+  background: var(--primary);
+  color: #ffffff;
+  border: 1px solid var(--primary);
+  box-shadow: 0 2px 6px rgba(14, 165, 233, 0.25);
+}
+body.light-mode .seat-legend-chip.avail {
+  background: #f0fdf4;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+body.light-mode .seat-legend-chip.occ {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+body.light-mode .seat-legend-chip.res {
+  background: #fffbeb;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
 /* 4. Onboarding Grids */
 .onb-grid {
   display: grid;
@@ -3467,49 +3516,39 @@ select option:checked {
     overflow-x: hidden;
   }
 
-  /* Backdrop */
-  .sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
-    z-index: 190;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease;
+  /* When bottom navigation bar is active on mobile, sidebar & menu button are completely disabled */
+  .menu-btn {
+    display: none !important;
   }
-  .sidebar-backdrop.active {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /* Sidebar Drawer on mobile */
   .sidebar {
-    width: min(280px, 85vw);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
-    z-index: 200;
+    display: none !important;
+  }
+  .sidebar-backdrop {
+    display: none !important;
   }
   .sidebar-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    border: none;
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-    font-size: 16px;
-    font-weight: 700;
-    cursor: pointer;
-    margin-left: auto;
-    transition: background 0.15s ease, color 0.15s ease;
+    display: none !important;
   }
-  .sidebar-close-btn:hover {
-    background: var(--bg-gray);
-    color: var(--text-primary);
+
+  /* Mobile Onboarding & Form polish */
+  .onb-grid {
+    grid-template-columns: 1fr !important;
+    gap: 0.9rem !important;
+  }
+  .onb-pay-grid {
+    grid-template-columns: 1fr !important;
+    gap: 0.85rem !important;
+  }
+  #onb-wizard .card {
+    padding: 1.15rem 0.9rem !important;
+    border-radius: 14px !important;
+  }
+  #onb-wizard input,
+  #onb-wizard select,
+  #onb-wizard textarea {
+    font-size: 15px !important;
+    padding: 11px 13px !important;
+    min-height: 46px !important;
   }
 
   /* Topbar compact layout */

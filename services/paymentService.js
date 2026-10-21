@@ -6,20 +6,25 @@ import { validateTransactionId } from "./paymentValidation.js";
 // STUDENT PAYMENT ACTIONS
 // ===============================================
 
-export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null, screenshot = "", extraDates = {}) => {
+export const submitPaymentRequest = async (student, transactionId, renewalMonths, amount, monthLabel = null, screenshot = "", extraDates = {}, paymentMethod = "UPI") => {
   try {
-    if (!transactionId || transactionId.trim() === "") {
+    const isCash = paymentMethod === "Cash" || paymentMethod === "Paid (Cash)";
+    const cleanTxn = isCash ? (transactionId && String(transactionId).trim() ? String(transactionId).trim() : "CASH") : String(transactionId || "").trim();
+
+    if (!isCash && (!cleanTxn || cleanTxn === "")) {
       throw new Error("Transaction ID is required.");
     }
 
-    // Determine the screenshot proof data URL (single mandatory screenshot)
+    // Determine the screenshot proof data URL (mandatory only for UPI/online)
     let singleShot = typeof screenshot === "string" ? screenshot : (Array.isArray(screenshot) && screenshot.length ? screenshot[0] : "");
-    if (!singleShot || typeof singleShot !== "string" || !singleShot.startsWith("data:image/")) {
+    if (!isCash && (!singleShot || typeof singleShot !== "string" || !singleShot.startsWith("data:image/"))) {
       throw new Error("Payment screenshot proof is required.");
     }
 
-    // Block reused UTRs before writing (same rule as onboarding claim).
-    try { await validateTransactionId(transactionId); } catch (dupErr) { throw dupErr; }
+    // Block reused UTRs before writing for UPI
+    if (!isCash && cleanTxn !== "CASH") {
+      try { await validateTransactionId(cleanTxn); } catch (dupErr) { throw dupErr; }
+    }
 
     const paymentData = {
       studentId: student.id,
@@ -27,6 +32,7 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
       planId: student.planId || "",
       planName: student.planName,
       amount: Number(amount),
+      paymentMethod: isCash ? "Cash" : "UPI",
       renewalPeriod: Number(renewalMonths || 1), // Months to add (kept for compat)
       renewalMonths: Number(renewalMonths || 1),
       renewalDays: Number(extraDates.durationDays || 0),
@@ -34,10 +40,10 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
       durationMode: extraDates.durationMode || "monthly",
       startDate: extraDates.startDate || "",
       endDate: extraDates.endDate || "",
-      transactionId: transactionId.trim(),
-      screenshot: singleShot,
-      paymentScreenshotUrl: singleShot,
-      screenshots: [singleShot],
+      transactionId: cleanTxn,
+      screenshot: isCash ? "" : singleShot,
+      paymentScreenshotUrl: isCash ? "" : singleShot,
+      screenshots: (!isCash && singleShot) ? [singleShot] : [],
       source: "renewal",
       status: "pending", // "pending", "approved", "rejected"
       dueDateStr: extraDates.endDate || student.paymentDueDate || "", // Reference for dashboard

@@ -105,11 +105,11 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
           </button>
         </div>
         <!-- Legend -->
-        <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem; flex-wrap:wrap;">
-          <span style="background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:500;">● Available</span>
-          <span style="background:#fef2f2; color:#991b1b; border:1px solid #fecaca; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:500;">● Occupied</span>
-          <span style="background:#fffbeb; color:#92400e; border:1px solid #fde68a; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:500;">${isCheckinContext ? "● Reserved — pickable" : "● Reserved"}</span>
-          <span style="background:var(--primary); color:#fff; border:1px solid var(--primary); padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600;">✓ Selected</span>
+        <div class="signup-seat-legend" style="display:flex; gap:0.6rem; margin-bottom:0.85rem; flex-wrap:wrap; align-items:center;">
+          <span class="seat-legend-chip avail">● Available</span>
+          <span class="seat-legend-chip occ">● Occupied</span>
+          <span class="seat-legend-chip res">${isCheckinContext ? "● Reserved — pickable" : "● Reserved"}</span>
+          <span class="seat-legend-chip sel">✓ Selected</span>
         </div>
         <!-- Seat grid -->
         <div id="signup-seat-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(70px,1fr)); gap:0.6rem; max-height:min(450px, 44vh); overflow-y:auto; padding-right:4px;"></div>
@@ -155,8 +155,12 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
           `;
         }
 
-        const isSelected = seat.id === signupSelectedId;
-        const isPickable = isCheckinContext ? (seat.status === "Available" || seat.status === "Reserved") : seat.status === "Available";
+        const scope = document.querySelector("dialog[open]") || document;
+        const curSelectedNum = ((scope.querySelector && scope.querySelector("#selectedSeatNumber")) || document.getElementById("selectedSeatNumber"))?.value;
+        const curSelectedId = ((scope.querySelector && scope.querySelector("#selectedSeatId")) || document.getElementById("selectedSeatId"))?.value;
+        const isCurrentPick = (curSelectedNum && String(seat.seatNumber) === String(curSelectedNum)) || (curSelectedId && (seat.id === curSelectedId || seat.seatNumber === curSelectedId));
+        const isSelected = seat.id === signupSelectedId || isCurrentPick;
+        const isPickable = isCheckinContext ? (seat.status === "Available" || seat.status === "Reserved") : (seat.status === "Available" || isSelected);
 
         const __pal = seatPalette(seat.status);
         let bg = __pal.bg, border = __pal.border, color = __pal.color, cursor = "not-allowed", opacity = "0.55";
@@ -216,8 +220,12 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
           compareSeatNumbers(a.seatNumber, b.seatNumber));
 
         let fallbackHtml = sortedSeats.map(seat => {
-          const isSelected = seat.id === signupSelectedId;
-          const isPickable = isCheckinContext ? (seat.status === "Available" || seat.status === "Reserved") : seat.status === "Available";
+          const scope = document.querySelector("dialog[open]") || document;
+          const curSelectedNum = ((scope.querySelector && scope.querySelector("#selectedSeatNumber")) || document.getElementById("selectedSeatNumber"))?.value;
+          const curSelectedId = ((scope.querySelector && scope.querySelector("#selectedSeatId")) || document.getElementById("selectedSeatId"))?.value;
+          const isCurrentPick = (curSelectedNum && String(seat.seatNumber) === String(curSelectedNum)) || (curSelectedId && (seat.id === curSelectedId || seat.seatNumber === curSelectedId));
+          const isSelected = seat.id === signupSelectedId || isCurrentPick;
+          const isPickable = isCheckinContext ? (seat.status === "Available" || seat.status === "Reserved") : (seat.status === "Available" || isSelected);
 
           const __pal = seatPalette(seat.status);
           let bg = __pal.bg, border = __pal.border, color = __pal.color, cursor = "not-allowed", opacity = "0.55";

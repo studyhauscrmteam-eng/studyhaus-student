@@ -107,24 +107,12 @@ function navigate(page) {
 
 // ==================== SIDEBAR TOGGLE ====================
 function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const backdrop = document.getElementById('sidebar-backdrop');
   if (window.innerWidth <= 768) {
-    if (sidebar) {
-      const isOpen = sidebar.classList.toggle('mobile-open');
-      if (backdrop) {
-        if (isOpen) {
-          backdrop.classList.add('active');
-          document.body.style.overflow = 'hidden';
-        } else {
-          backdrop.classList.remove('active');
-          document.body.style.overflow = '';
-        }
-      }
-    }
-  } else {
-    if (sidebar) sidebar.classList.toggle('collapsed');
+    // Dedicated bottom navigation bar is active on mobile — no sidebar drawer
+    return;
   }
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) sidebar.classList.toggle('collapsed');
 }
 
 // ==================== FILTER TABS ====================

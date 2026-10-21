@@ -54,10 +54,11 @@ export const detailsComplete = (s = {}) =>
 export const docsComplete = (d = {}) =>
   has(d.aadhaarFront) && has(d.aadhaarBack) && has(d.photo);
 
-/** Pay Later -> a due date. Pay Now -> a reference AND its screenshot. */
+/** Pay Later -> a due date. Cash -> settled at desk. Pay Now -> a reference AND its screenshot. */
 export const paymentComplete = (s = {}) => {
   if (!has(s.paymentMethod)) return false;
   if (s.paymentMethod === "Pay Later") return has(s.paymentDueDate);
+  if (s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)") return true;
   return has(s.transactionId) && has(s.paymentScreenshotUrl);
 };
 
@@ -565,30 +566,43 @@ export const reserveSeat = async (studentId, seatNumber, studentName, seatId, se
   try {
     const seatRef = await resolveSeatRef(seatNumber, seatId, seatFloorHint);
     if (!seatRef) throw new Error("That seat no longer exists.");
-    await runTransaction(db, async (tx) => {
-      const seatSnap = await tx.get(seatRef);
-      if (!seatSnap.exists()) throw new Error("That seat no longer exists.");
-      const seat = seatSnap.data();
-      const uid = getAuth().currentUser.uid;
+    const seatSnap = await getDoc(seatRef);
+    if (!seatSnap.exists()) throw new Error("That seat no longer exists.");
+    const seat = seatSnap.data();
+    const uid = getAuth().currentUser.uid;
 
-      const free =
-        seat.status === "Available" ||
-        seat.status === "Reserved" && seat.assignedStudentId === uid;
-      if (!free) throw new Error(`Seat ${seatNumber} (${seat.floor || seatFloorHint || 'Ground Floor'}) was just taken. Please pick another.`);
+    const free =
+      seat.status === "Available" ||
+      (seat.status === "Reserved" && seat.assignedStudentId === uid);
+    if (!free) throw new Error(`Seat ${seatNumber} (${seat.floor || seatFloorHint || 'Ground Floor'}) is already occupied or reserved. Please choose another.`);
 
-      tx.update(seatRef, {
-        status: "Reserved",
-        assignedStudentId: uid,
-        assignedStudentName: studentName || "",
-        lastUpdated: serverTimestamp()
-      });
-      tx.update(doc(db, "students", studentId), {
-        seatNumber: seat.seatNumber || seatNumber,
-        seatId: seatRef.id,
-        seatFloor: (seat.floor || seatFloorHint || "Ground Floor"),
-        updatedAt: serverTimestamp()
-      });
+    // DO NOT write directly to the main 'seats' collection doc while the student is still in onboarding.
+    // Writing to 'seats' prematurely reflects across the entire website and portal before approval,
+    // and blocks the student from changing their seat if they go back.
+    // Instead, store the applicant's chosen seat on their student record.
+    // Official assignment into 'seats' happens only upon admin approval.
+    await updateDoc(doc(db, "students", studentId), {
+      seatNumber: seat.seatNumber || seatNumber,
+      seatId: seatRef.id,
+      seatFloor: (seat.floor || seatFloorHint || "Ground Floor"),
+      updatedAt: serverTimestamp()
     });
+
+    // Also clean up any legacy 'seats' doc that might have been marked Reserved under this student's uid
+    try {
+      const held = await getDocs(query(collection(db, "seats"), where("assignedStudentId", "==", uid)));
+      for (const d of held.docs) {
+        if (d.data().status === "Reserved") {
+          await updateDoc(d.ref, {
+            status: "Available",
+            assignedStudentId: "",
+            assignedStudentName: "",
+            lastUpdated: serverTimestamp()
+          });
+        }
+      }
+    } catch (_) {}
+
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -597,39 +611,30 @@ export const reserveSeat = async (studentId, seatNumber, studentName, seatId, se
 
 /** Release a seat the student previously reserved (e.g. they changed plan). */
 export const releaseSeat = async (seatNumber) => {
-  if (!seatNumber) return { success: true };
   try {
-    const uid = getAuth().currentUser.uid;
-    // Resolve by holder first (exact), falling back to number lookup.
-    let refs = [];
-    try {
-      const held = await getDocs(query(collection(db, "seats"), where("assignedStudentId", "==", uid)));
-      const plain = stripSeatPlain(seatNumber);
-      refs = held.docs
-        .filter((d) => stripSeatPlain((d.data() || {}).seatNumber) === plain)
-        .map((d) => d.ref);
-      if (!refs.length && held.docs.length > 0) refs = [];
-    } catch (_) { /* fall through to number lookup */ }
-    if (!refs.length) {
-      const single = await resolveSeatRef(seatNumber, seatNumber);
-      if (single) refs = [single];
+    const uid = getAuth().currentUser?.uid;
+    if (uid) {
+      await updateDoc(doc(db, "students", uid), {
+        seatNumber: "",
+        seatId: "",
+        seatFloor: "",
+        updatedAt: serverTimestamp()
+      }).catch(() => {});
     }
-    if (!refs.length) return { success: true };
-    await runTransaction(db, async (tx) => {
-      for (const seatRef of refs) {
-        const snap = await tx.get(seatRef);
-        if (!snap.exists()) continue;
-        const seat = snap.data();
-        if (seat.status === "Occupied") continue;          // already in use at the desk
-        if (seat.assignedStudentId && seat.assignedStudentId !== uid) continue; // not ours
-        tx.update(seatRef, {
-          status: "Available",
-          assignedStudentId: "",
-          assignedStudentName: "",
-          lastUpdated: serverTimestamp()
-        });
+    // Also release any legacy seat doc in 'seats' held by this uid
+    if (uid) {
+      const held = await getDocs(query(collection(db, "seats"), where("assignedStudentId", "==", uid)));
+      for (const d of held.docs) {
+        if (d.data().status === "Reserved") {
+          await updateDoc(d.ref, {
+            status: "Available",
+            assignedStudentId: "",
+            assignedStudentName: "",
+            lastUpdated: serverTimestamp()
+          }).catch(() => {});
+        }
       }
-    });
+    }
     return { success: true };
   } catch (e) {
     console.warn("[onboarding] release seat:", e.message);
@@ -659,9 +664,11 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
       // READ FIRST: the transaction-ID claim must be read before tx.update()
       // below, because Firestore allows no read at all once a write has been
       // issued in the same transaction.
+      const isCash = paymentMethod === "Cash" || paymentMethod === "Paid (Cash)";
+      const isPaid = paymentMethod === "Paid";
       const key = String(transactionId || "").trim().toLowerCase();
       const claimRef =
-        paymentMethod === "Paid" && transactionId && key !== "rc-imp"
+        isPaid && transactionId && key !== "rc-imp" && key !== "cash"
           ? doc(db, "uniqueness", "txn_" + key)
           : null;
       const claimSnap = claimRef ? await tx.get(claimRef) : null;
@@ -671,9 +678,9 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
       }
 
       const payload = {
-        paymentMethod,
-        transactionId: transactionId || "",
-        paymentScreenshotUrl: paymentScreenshotUrl || "",
+        paymentMethod: isCash ? "Cash" : paymentMethod,
+        transactionId: isCash ? "CASH" : (transactionId || ""),
+        paymentScreenshotUrl: isCash ? "" : (paymentScreenshotUrl || ""),
         termsAccepted: true,
         updatedAt: now,
         // THE gate for the admin's admission alert. This is the last step of
@@ -684,7 +691,7 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         applicationReady: true,
         submittedAt: now
       };
-      // Pay Later records a due date; Pay Now clears any due date left over
+      // Pay Later records a due date; Pay Now & Cash clear any due date left over
       // from an earlier attempt so the pending screen can never show both.
       const todayStr = new Date().toISOString().split("T")[0];
       const dEnd = new Date();
@@ -713,13 +720,12 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
       }
     });
 
-    // Onboarding Paid must COUNT: create a real payments/pending doc reusing
-    // the same screenshot + txn, so it shows in history and the admin approves
-    // it like any renewal. Additive only — never modifies existing docs.
-    // Pay Later writes no payment doc (due banner covers it).
-    if (paymentMethod === "Paid" && transactionId && String(transactionId).trim() !== "") {
+    // Onboarding Paid or Cash must COUNT: create a real payments/pending doc,
+    // so it shows in history and the admin approves it like any renewal.
+    const isCashMode = paymentMethod === "Cash" || paymentMethod === "Paid (Cash)";
+    if ((paymentMethod === "Paid" && transactionId && String(transactionId).trim() !== "") || isCashMode) {
       try {
-        const txnTrimmed = String(transactionId).trim();
+        const txnTrimmed = isCashMode ? "CASH" : String(transactionId).trim();
         // Idempotent: resubmits must not duplicate the payment row.
         const dupQ = query(
           collection(db, "payments"),

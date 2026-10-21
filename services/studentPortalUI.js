@@ -519,11 +519,50 @@ window.calculatePaymentAmount = async () => {
   if (endDisp && endEl) endDisp.innerText = fmtDispDate(endEl.value);
 };
 
+window.onPaymentMethodChange = (method) => {
+  const isCash = method === "Cash";
+  const upiLabel = document.getElementById("sp-paymethod-upi-label");
+  const cashLabel = document.getElementById("sp-paymethod-cash-label");
+  const upiGroup = document.getElementById("sp-upi-group");
+  const cashGroup = document.getElementById("sp-cash-group");
+  const qrBoxUpi = document.getElementById("sp-qr-upi-view");
+  const qrBoxCash = document.getElementById("sp-qr-cash-view");
+  const submitBtn = document.getElementById("btn-submit-payment");
+
+  if (upiLabel) {
+    upiLabel.style.borderColor = isCash ? "var(--border-bright)" : "var(--primary)";
+    upiLabel.style.background = isCash ? "var(--bg-hover)" : "rgba(14,165,233,0.08)";
+  }
+  if (cashLabel) {
+    cashLabel.style.borderColor = isCash ? "var(--accent-emerald, #10b981)" : "var(--border-bright)";
+    cashLabel.style.background = isCash ? "rgba(16,185,129,0.08)" : "var(--bg-hover)";
+  }
+
+  if (upiGroup) upiGroup.style.display = isCash ? "none" : "flex";
+  if (cashGroup) cashGroup.style.display = isCash ? "block" : "none";
+  if (qrBoxUpi) qrBoxUpi.style.display = isCash ? "none" : "flex";
+  if (qrBoxCash) qrBoxCash.style.display = isCash ? "flex" : "none";
+
+  const txnInput = document.getElementById("payment-txnid");
+  const ssInput = document.getElementById("payment-ss");
+  if (txnInput) txnInput.required = !isCash;
+  if (ssInput) ssInput.required = !isCash;
+
+  if (submitBtn) {
+    submitBtn.innerHTML = isCash
+      ? `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg> Submit Cash Renewal Request`
+      : `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Submit Renewal Request`;
+  }
+};
+
 window.handlePaymentSubmit = async () => {
   const btn = document.getElementById("btn-submit-payment");
-  const txnId = document.getElementById("payment-txnid").value;
+  const isCash = document.getElementById("sp-paymethod-cash")?.checked === true;
+  const txnId = isCash ? "CASH" : (document.getElementById("payment-txnid")?.value || "").trim();
 
-  if (!txnId) return window.showToast(window.t ? window.t('Please enter the Transaction ID.') || "Please enter the Transaction ID." : "Please enter the Transaction ID.", "error");
+  if (!isCash && !txnId) {
+    return window.showToast(window.t ? window.t('Please enter the Transaction ID.') || "Please enter the Transaction ID." : "Please enter the Transaction ID.", "error");
+  }
 
   const modeSelect = document.getElementById("student-duration-mode");
   const valInput = document.getElementById("student-duration-val");
@@ -543,19 +582,21 @@ window.handlePaymentSubmit = async () => {
   btn.innerHTML = "Submitting...";
   btn.disabled = true;
 
-  // Single mandatory payment screenshot proof
+  // Single mandatory payment screenshot proof (for UPI only)
   let screenshot = "";
-  try {
-    screenshot = await collectPaymentScreenshot();
-  } catch (e) {
-    btn.innerHTML = "Submit Renewal Request";
-    btn.disabled = false;
-    return window.showToast(e.message || "Payment screenshot proof is required.", "error");
-  }
-  if (!screenshot) {
-    btn.innerHTML = "Submit Renewal Request";
-    btn.disabled = false;
-    return window.showToast("Payment screenshot proof is required.", "error");
+  if (!isCash) {
+    try {
+      screenshot = await collectPaymentScreenshot();
+    } catch (e) {
+      btn.innerHTML = "Submit Renewal Request";
+      btn.disabled = false;
+      return window.showToast(e.message || "Payment screenshot proof is required.", "error");
+    }
+    if (!screenshot) {
+      btn.innerHTML = "Submit Renewal Request";
+      btn.disabled = false;
+      return window.showToast("Payment screenshot proof is required.", "error");
+    }
   }
 
   const res = await submitPaymentRequest(
@@ -565,18 +606,27 @@ window.handlePaymentSubmit = async () => {
     amount,
     null,
     screenshot,
-    { startDate, endDate, durationDays, durationMode: mode }
+    { startDate, endDate, durationDays, durationMode: mode },
+    isCash ? "Cash" : "UPI"
   );
   if (res.success) {
-    window.showToast(window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!", "success");
-    document.getElementById("payment-txnid").value = "";
+    window.showToast(
+      isCash
+        ? "Cash Renewal Request Submitted! Please settle payment at the front desk."
+        : (window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!"),
+      "success"
+    );
+    const txnInput = document.getElementById("payment-txnid");
+    if (txnInput) txnInput.value = "";
     const ssInput = document.getElementById("payment-ss");
     if (ssInput) ssInput.value = "";
   } else {
     window.showToast("Failed: " + res.error, "error");
   }
 
-  btn.innerHTML = "Submit Renewal Request";
+  btn.innerHTML = isCash
+    ? `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg> Submit Cash Renewal Request`
+    : `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Submit Renewal Request`;
   btn.disabled = false;
 };
 
@@ -1969,21 +2019,58 @@ const renderPortal = () => {
                 </div>
               </div>
 
-              <form onsubmit="event.preventDefault(); window.handlePaymentSubmit();" class="form-grid" style="gap: 1.5rem;">
+              <form onsubmit="event.preventDefault(); window.handlePaymentSubmit();" class="form-grid" style="gap: 1.25rem;">
+                <!-- Payment Method Selector -->
+                <div class="form-group full-width" style="margin-bottom: 0.25rem;">
+                  <label style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; display: block; letter-spacing:0.05em;">PAYMENT METHOD *</label>
+                  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;">
+                    <!-- UPI Option -->
+                    <label id="sp-paymethod-upi-label" style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:2px solid var(--primary); background:rgba(14,165,233,0.08); cursor:pointer; font-weight:600; font-size:13.5px; color:var(--text-primary); transition:all 0.15s ease;">
+                      <input type="radio" name="portal-payment-method" id="sp-paymethod-upi" value="UPI" checked onchange="window.onPaymentMethodChange('UPI')" style="accent-color:var(--primary); width:16px; height:16px;" />
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                      <span>Pay Online (UPI)</span>
+                    </label>
+                    <!-- Cash Option -->
+                    <label id="sp-paymethod-cash-label" style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:2px solid var(--border-bright); background:var(--bg-hover); cursor:pointer; font-weight:600; font-size:13.5px; color:var(--text-primary); transition:all 0.15s ease;">
+                      <input type="radio" name="portal-payment-method" id="sp-paymethod-cash" value="Cash" onchange="window.onPaymentMethodChange('Cash')" style="accent-color:var(--primary); width:16px; height:16px;" />
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--accent-emerald, #10b981);"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+                      <span>Pay with Cash</span>
+                    </label>
+                  </div>
+                </div>
+
                 <div class="form-group">
                   <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">Amount (₹)</label>
                   <div id="payment-amount-display" style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); padding: 6px 0;">₹--</div>
                   <input type="hidden" id="payment-amount" value="0" />
                 </div>
-                <div class="form-group full-width">
-                  <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">UPI Transaction ID *</label>
-                  <input type="text" id="payment-txnid" required class="sp-input" placeholder="Enter your 12-digit UPI Txn ID" />
+
+                <!-- UPI Fields -->
+                <div id="sp-upi-group" class="full-width" style="display:flex; flex-direction:column; gap:1.25rem;">
+                  <div class="form-group full-width">
+                    <label style="font-size: 0.75rem; font-weight: 600; color:var(--text-secondary); text-transform: uppercase;">UPI Transaction ID *</label>
+                    <input type="text" id="payment-txnid" required class="sp-input" placeholder="Enter your 12-digit UPI Txn ID" />
+                  </div>
+                  <div class="form-group full-width">
+                    <label style="font-size: 0.75rem; font-weight: 700; color:var(--text-primary); text-transform: uppercase; letter-spacing:0.04em;">Payment Screenshot (Required) *</label>
+                    <input type="file" id="payment-ss" accept="image/*" required class="sp-input" style="padding:8px;" />
+                    <small style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:4px;">Upload 1 clear screenshot proof of your payment.</small>
+                  </div>
                 </div>
-                <div class="form-group full-width">
-                  <label style="font-size: 0.75rem; font-weight: 700; color:var(--text-primary); text-transform: uppercase; letter-spacing:0.04em;">Payment Screenshot (Required) *</label>
-                  <input type="file" id="payment-ss" accept="image/*" required class="sp-input" style="padding:8px;" />
-                  <small style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:4px;">Upload 1 clear screenshot proof of your payment.</small>
+
+                <!-- Cash Notice -->
+                <div id="sp-cash-group" class="form-group full-width" style="display:none;">
+                  <div style="padding:1rem; border-radius:10px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); color:var(--text-primary);">
+                    <div style="display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px; color:var(--accent-emerald, #10b981); margin-bottom:4px;">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+                      Cash Payment at Desk
+                    </div>
+                    <div style="font-size:13px; color:var(--text-secondary); line-height:1.45;">
+                      Please hand over the exact cash amount to the receptionist. Your renewal request will be sent to the admin and approved as soon as cash is received at the desk.
+                    </div>
+                  </div>
                 </div>
+
                 <div class="form-group full-width sp-actions">
                   <button type="button" class="btn btn-ghost" title="Clear the transaction ID field" onclick="document.getElementById('payment-txnid').value=''">Clear</button>
                   <button type="submit" id="btn-submit-payment" class="btn btn-primary sp-pay-submit" style="background:#16a34a; border-color:#16a34a;">
@@ -1994,13 +2081,26 @@ const renderPortal = () => {
               </form>
             </div>
 
-            <!-- RIGHT SIDE: QR Code -->
+            <!-- RIGHT SIDE: QR Code / Cash Info -->
             <div class="sp-qr">
-              <h4 style="margin:0; font-size: 0.9rem; color:var(--text-secondary); text-align:center;">Scan to Pay</h4>
-              <div style="width: 160px; height: 160px; background:var(--bg-card); border:1px solid var(--border); border-radius: 8px; display:flex; align-items:center; justify-content:center; overflow: hidden;">
-                <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 100%; height: 100%; object-fit: contain;" />
+              <!-- UPI View -->
+              <div id="sp-qr-upi-view" style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; width:100%;">
+                <h4 style="margin:0; font-size: 0.9rem; color:var(--text-secondary); text-align:center;">Scan to Pay</h4>
+                <div style="width: 160px; height: 160px; background:var(--bg-card); border:1px solid var(--border); border-radius: 8px; display:flex; align-items:center; justify-content:center; overflow: hidden; padding:4px;">
+                  <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 100%; height: 100%; object-fit: contain;" />
+                </div>
+                <p style="font-size: 0.75rem; color:var(--text-secondary); text-align: center; margin: 0; line-height: 1.4;">Pay using GPay, PhonePe, or Paytm and enter the Txn ID here.</p>
               </div>
-              <p style="font-size: 0.75rem; color:var(--text-secondary); text-align: center; margin: 0; line-height: 1.4;">Pay using GPay, PhonePe, or Paytm and enter the Txn ID here.</p>
+
+              <!-- Cash View -->
+              <div id="sp-qr-cash-view" style="display:none; flex-direction:column; align-items:center; gap:0.75rem; width:100%; text-align:center; padding:0.5rem 0;">
+                <div style="width: 72px; height: 72px; border-radius: 50%; background: rgba(16,185,129,0.14); border: 2px solid rgba(16,185,129,0.35); display: flex; align-items: center; justify-content: center; color: var(--accent-emerald, #10b981); margin-top:0.5rem;">
+                  <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+                </div>
+                <h4 style="margin:0; font-size: 1rem; color:var(--text-primary); font-weight:700;">Desk Payment</h4>
+                <p style="font-size: 0.8rem; color:var(--text-secondary); line-height: 1.45; margin: 0;">Settle your payment directly in cash with the administrator at the study hall reception.</p>
+                <div style="font-size: 0.75rem; font-weight:600; color:var(--accent-emerald, #10b981); padding: 4px 10px; background: rgba(16,185,129,0.1); border-radius: 999px;">Cash accepted at desk</div>
+              </div>
             </div>
 
           </div>

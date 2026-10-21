@@ -56,7 +56,7 @@ const progressHtml = (state, student, documents, plan) => {
   const active = WIZARD_STEPS.findIndex((s) => s.key === state);
 
   return `
-    <div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:1.5rem;overflow-x:auto;padding-bottom:.25rem;">
+    <div class="onb-progress-rail" style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:1.5rem;overflow-x:auto;padding-bottom:.25rem;-webkit-overflow-scrolling:touch;">
       ${WIZARD_STEPS.map((step, i) => {
         const isDone = done[step.key];
         const isActive = i === active;
@@ -65,15 +65,15 @@ const progressHtml = (state, student, documents, plan) => {
         const color = isActive ? "var(--primary)" : (isDone ? "var(--success, #10b981)" : "var(--text-muted)");
         const bg = isActive ? "var(--primary)" : (isDone ? "rgba(16,185,129,.15)" : "var(--bg-hover)");
         return `
-          <div style="flex:1;min-width:96px;text-align:center;opacity:${skipped ? .45 : 1};">
-            <div style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-                        margin:0 auto .4rem;font-size:13px;font-weight:700;color:${isActive ? "#fff" : color};
+          <div class="onb-step-item" style="flex:1;min-width:68px;text-align:center;opacity:${skipped ? .45 : 1};">
+            <div class="onb-step-circle" style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+                        margin:0 auto .4rem;font-size:12.5px;font-weight:700;color:${isActive ? "#fff" : color};
                         background:${bg};border:2px solid ${isActive ? "var(--primary)" : (isDone ? "rgba(16,185,129,.4)" : "var(--border-bright)")};">
               ${num}
             </div>
-            <div style="font-size:11.5px;font-weight:600;color:${isActive ? "var(--text-primary)" : "var(--text-muted)"};">${step.label}</div>
+            <div class="onb-step-title" style="font-size:11.5px;font-weight:600;color:${isActive ? "var(--text-primary)" : "var(--text-muted)"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${step.label}</div>
             ${skipped ? `<div style="font-size:10px;color:var(--text-muted);">n/a</div>` : ""}
-            <div style="height:3px;border-radius:2px;margin-top:.5rem;background:${isDone || isActive ? color : "var(--border)"};"></div>
+            <div style="height:3px;border-radius:2px;margin-top:.4rem;background:${isDone || isActive ? color : "var(--border)"};"></div>
           </div>`;
       }).join("")}
     </div>`;
@@ -210,37 +210,66 @@ const seatBody = () => `
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 1rem;">
     Only seats marked <strong>Available</strong> can be chosen. Your seat is reserved for you the moment you select it.
   </p>
-  ${seatLegend()}
-  <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:1rem;min-height:220px;background:var(--bg-hover);"></div>
+  <div id="onb-seat" style="border:1px solid var(--border-bright);border-radius:12px;padding:0.75rem;min-height:220px;background:var(--bg-hover);"></div>
   <input type="hidden" id="selectedSeatNumber" />
   <input type="hidden" id="selectedSeatFloor" />
   <input type="hidden" id="selectedSeatId" />
   <p id="onb-seat-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>`;
 
 const paymentBody = (s, plan, amount) => `
-  <h3 style="font-size:15px;margin:0 0 1rem;">Payment</h3>
-  <div class="onb-pay-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;">
-    <label id="onb-pay-later-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1rem;cursor:pointer;background:rgba(255,255,255,.02);">
-      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
-        <input type="radio" name="onb-paymethod" id="onb-pay-later" value="Pay Later" ${s.paymentMethod === "Pay Later" || !s.paymentMethod ? "checked" : ""} />
-        <strong style="font-size:14px;color:var(--text-primary);">Pay Later</strong>
+  <h3 style="font-size:15px;margin:0 0 .5rem;">Select Payment Method</h3>
+  <p style="font-size:13px;color:var(--text-muted);margin:0 0 1.25rem;">Choose your preferred payment method to complete admission.</p>
+  <div class="onb-pay-grid" style="display:grid;grid-template-columns:1fr;gap:1rem;margin-bottom:1.25rem;">
+    <!-- CASH OPTION -->
+    <label id="onb-pay-cash-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1.1rem;cursor:pointer;background:var(--bg-hover);transition:all .15s ease;">
+      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.5rem;">
+        <input type="radio" name="onb-paymethod" id="onb-pay-cash" value="Cash" ${s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)" ? "checked" : ""} style="accent-color:var(--primary);width:17px;height:17px;" />
+        <strong style="font-size:14.5px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--accent-emerald, #10b981);"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+          Pay with Cash
+        </strong>
       </div>
-      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.75rem;">Reserve now, settle at the desk before the due date.</div>
-      ${field("onb-due", "Pay by (date)", input("onb-due", "date", s.paymentDueDate || defaultDueDate(), "required"), true, false)}
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">
+        Settle <strong>${esc(amount)}</strong> in cash at the reception desk. Staff will collect cash upon admission.
+      </div>
+      <div style="padding:8px 10px;border-radius:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);font-size:12px;color:var(--accent-emerald, #10b981);font-weight:600;">
+        ✓ Direct desk payment · No transaction ID or screenshot needed
+      </div>
     </label>
 
-    <label id="onb-pay-now-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1rem;cursor:pointer;background:rgba(255,255,255,.02);">
-      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
-        <input type="radio" name="onb-paymethod" id="onb-pay-now" value="Paid" ${s.paymentMethod === "Paid" ? "checked" : ""} />
-        <strong style="font-size:14px;color:var(--text-primary);">Pay Now (UPI)</strong>
+    <!-- UPI OPTION -->
+    <label id="onb-pay-now-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1.1rem;cursor:pointer;background:var(--bg-hover);transition:all .15s ease;">
+      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.5rem;">
+        <input type="radio" name="onb-paymethod" id="onb-pay-now" value="Paid" ${s.paymentMethod === "Paid" ? "checked" : ""} style="accent-color:var(--primary);width:17px;height:17px;" />
+        <strong style="font-size:14.5px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          Pay Now (UPI)
+        </strong>
       </div>
-      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.75rem;">Scan, pay, then paste the reference and attach the screenshot.</div>
-      <div style="text-align:center;margin-bottom:.75rem;">
-        <img src="" class="payment-qr-img" alt="Scan to pay" style="width:150px;height:150px;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:#fff;" />
-        <div style="font-size:13px;font-weight:600;margin-top:.35rem;color:var(--text-primary);">Scan to pay <span style="color:var(--primary);">${esc(amount)}</span></div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">Scan QR, pay ${esc(amount)}, then enter the UPI Reference ID &amp; attach proof.</div>
+      <div id="onb-upi-fields" style="display:none;margin-top:.75rem;">
+        <div style="text-align:center;margin:0.75rem 0;">
+          <img src="" class="payment-qr-img" alt="Scan to pay" style="width:140px;height:140px;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:#fff;padding:4px;" />
+          <div style="font-size:13px;font-weight:700;margin-top:.4rem;color:var(--text-primary);">Scan to pay <span style="color:var(--primary);">${esc(amount)}</span></div>
+        </div>
+        ${field("onb-txn", "UPI Transaction ID", input("onb-txn", "text", s.transactionId || "", 'placeholder="12-digit UPI Ref / UTR number"'), true, false)}
+        <div id="onb-shot-docs" style="margin-top:.75rem;"></div>
       </div>
-      ${field("onb-txn", "Transaction ID", input("onb-txn", "text", s.transactionId || "", 'placeholder="UPI Ref / UTR number"'), true, false)}
-      <div id="onb-shot-docs" style="margin-top:.75rem;"></div>
+    </label>
+
+    <!-- PAY LATER OPTION -->
+    <label id="onb-pay-later-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1.1rem;cursor:pointer;background:var(--bg-hover);transition:all .15s ease;">
+      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.5rem;">
+        <input type="radio" name="onb-paymethod" id="onb-pay-later" value="Pay Later" ${(s.paymentMethod === "Pay Later" || !s.paymentMethod) && s.paymentMethod !== "Cash" && s.paymentMethod !== "Paid (Cash)" && s.paymentMethod !== "Paid" ? "checked" : ""} style="accent-color:var(--primary);width:17px;height:17px;" />
+        <strong style="font-size:14.5px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--accent-amber, #f59e0b);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Pay Later
+        </strong>
+      </div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">Reserve now, settle at the desk before the due date.</div>
+      <div id="onb-later-fields" style="display:none;margin-top:.75rem;">
+        ${field("onb-due", "Pay by (date)", input("onb-due", "date", s.paymentDueDate || defaultDueDate(), "required"), true, false)}
+      </div>
     </label>
   </div>
   <p id="onb-pay-status" style="font-size:12.5px;color:var(--text-muted);"></p>`;
@@ -263,8 +292,8 @@ const pendingBody = (s) => `
     </p>
     <ul style="text-align:left;color:var(--text-secondary);font-size:.95rem;line-height:1.6;padding-left:1.5rem;max-width:460px;margin:0 auto 1.5rem;">
       <li>Check status here any time — this screen disappears once you are approved.</li>
-      <li>Choosing <strong>Pay Later</strong>? Please visit the desk before
-        <strong>${s.paymentDueDate ? new Date(s.paymentDueDate).toLocaleDateString("en-GB") : "your due date"}</strong>.</li>
+      ${(s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)") ? `<li>Chosen <strong>Pay with Cash</strong>? Please visit the reception desk to hand over the cash payment to the administrator.</li>` : `<li>Choosing <strong>Pay Later</strong>? Please visit the desk before
+        <strong>${s.paymentDueDate ? new Date(s.paymentDueDate).toLocaleDateString("en-GB") : "your due date"}</strong>.</li>`}
       <li>Need to change something? Contact the desk and the admin can reopen your application.</li>
     </ul>
     <button class="btn btn-ghost" onclick="window.location.reload()">Refresh status</button>
@@ -506,11 +535,16 @@ export const renderOnboarding = async (opts) => {
     const status = document.getElementById("onb-seat-status");
     const prefill = () => {
       const numEl = document.getElementById("selectedSeatNumber");
-      if (numEl && !numEl.value && student.seatNumber) {
-        numEl.value = student.seatNumber;
-        const idEl = document.getElementById("selectedSeatId");
-        if (idEl && !idEl.value) idEl.value = student.seatNumber;
-        if (status) status.textContent = `Currently reserved: seat ${student.seatNumber}. Pick a different one to change it.`;
+      const idEl = document.getElementById("selectedSeatId");
+      const flEl = document.getElementById("selectedSeatFloor");
+      if (student.seatNumber) {
+        if (numEl) numEl.value = student.seatNumber;
+        if (idEl) idEl.value = student.seatId || student.seatNumber;
+        if (flEl) flEl.value = student.seatFloor || "Ground Floor";
+        if (status) status.innerHTML = `<span style="color:var(--accent-emerald, #10b981);font-weight:600;">Currently selected: seat ${student.seatNumber} (${student.seatFloor || "Ground Floor"}). Tap any available seat to change it.</span>`;
+        if (typeof window._signupSelectSeat === "function") {
+          window._signupSelectSeat(student.seatId || student.seatNumber, student.seatNumber, true, student.seatFloor || "Ground Floor");
+        }
       }
     };
     import("./seatMapUI.js")
@@ -540,18 +574,48 @@ export const renderOnboarding = async (opts) => {
     import("./qrService.js").then(({ paintQrImages }) => paintQrImages(container)).catch(() => {});
 
     const syncCards = () => {
-      const later = document.getElementById("onb-pay-later");
-      const now = document.getElementById("onb-pay-now");
-      const l = document.getElementById("onb-pay-later-card");
-      const n = document.getElementById("onb-pay-now-card");
-      const on = now && now.checked;
-      if (l) l.style.borderColor = on ? "var(--border-bright)" : "var(--primary)";
-      if (n) n.style.borderColor = on ? "var(--primary)" : "var(--border-bright)";
+      const cashRadio = document.getElementById("onb-pay-cash");
+      const nowRadio = document.getElementById("onb-pay-now");
+      const laterRadio = document.getElementById("onb-pay-later");
+
+      const cashCard = document.getElementById("onb-pay-cash-card");
+      const nowCard = document.getElementById("onb-pay-now-card");
+      const laterCard = document.getElementById("onb-pay-later-card");
+
+      const upiFields = document.getElementById("onb-upi-fields");
+      const laterFields = document.getElementById("onb-later-fields");
+
+      const isCash = cashRadio && cashRadio.checked;
+      const isNow = nowRadio && nowRadio.checked;
+      const isLater = laterRadio && laterRadio.checked;
+
+      if (cashCard) {
+        cashCard.style.borderColor = isCash ? "var(--accent-emerald, #10b981)" : "var(--border-bright)";
+        cashCard.style.background = isCash ? "rgba(16,185,129,0.06)" : "var(--bg-hover)";
+      }
+      if (nowCard) {
+        nowCard.style.borderColor = isNow ? "var(--primary)" : "var(--border-bright)";
+        nowCard.style.background = isNow ? "rgba(14,165,233,0.06)" : "var(--bg-hover)";
+      }
+      if (laterCard) {
+        laterCard.style.borderColor = isLater ? "var(--accent-amber, #f59e0b)" : "var(--border-bright)";
+        laterCard.style.background = isLater ? "rgba(245,158,11,0.06)" : "var(--bg-hover)";
+      }
+
+      if (upiFields) upiFields.style.display = isNow ? "block" : "none";
+      if (laterFields) laterFields.style.display = isLater ? "block" : "none";
+
       const due = document.getElementById("onb-due");
-      if (due) due.disabled = !!on;
-      if (later) later.addEventListener("change", syncCards);
-      if (now) now.addEventListener("change", syncCards);
+      if (due) due.disabled = !isLater;
+      const txn = document.getElementById("onb-txn");
+      if (txn) txn.disabled = !isNow;
     };
+    const cRadio = document.getElementById("onb-pay-cash");
+    const nRadio = document.getElementById("onb-pay-now");
+    const lRadio = document.getElementById("onb-pay-later");
+    if (cRadio) cRadio.addEventListener("change", syncCards);
+    if (nRadio) nRadio.addEventListener("change", syncCards);
+    if (lRadio) lRadio.addEventListener("change", syncCards);
     syncCards();
   }
 
@@ -687,27 +751,33 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       const seatFloor = val("selectedSeatFloor") || window.selectedSeatFloor || "Ground Floor";
       if (!seatNumber) return toast("Please select a seat from the map.", "warning");
 
-      setBusy(true, "Reserving…");
+      setBusy(true, "Saving seat…");
       const res = await reserveSeat(id, seatNumber, student.name || "", val("selectedSeatId"), seatFloor);
       setBusy(false);
       if (!res.success) return toast(res.error, "error");
 
-      toast(`Seat ${seatNumber} (${seatFloor}) reserved for you.`, "success");
+      student.seatNumber = seatNumber;
+      student.seatFloor = seatFloor;
+      student.seatId = val("selectedSeatId") || seatNumber;
+
+      toast(`Seat ${seatNumber} (${seatFloor}) selected.`, "success");
       return onAdvance(STATE.PAYMENT);
     }
 
     /* ------------------------------------------------------------ payment */
     if (state === STATE.PAYMENT) {
+      const cashEl = document.getElementById("onb-pay-cash");
       const nowEl = document.getElementById("onb-pay-now");
+      const isCash = !!(cashEl && cashEl.checked);
       const paid = !!(nowEl && nowEl.checked);
-      const method = paid ? "Paid" : "Pay Later";
+      const method = isCash ? "Cash" : (paid ? "Paid" : "Pay Later");
       const txnId = val("onb-txn");
       const dueDate = val("onb-due");
 
-      if (!paid && !dueDate) return toast("Please choose the date you will pay by.", "warning");
+      if (!isCash && !paid && !dueDate) return toast("Please choose the date you will pay by.", "warning");
       if (paid && !txnId) return toast("Please enter the transaction ID from your payment.", "warning");
 
-      setBusy(true, paid ? "Submitting payment…" : "Submitting…");
+      setBusy(true, isCash ? "Submitting application…" : (paid ? "Submitting payment…" : "Submitting…"));
       let shot = "";
       try {
         if (paid) {
@@ -723,8 +793,8 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
         }
         const res = await submitPaymentAndApplication(id, {
           paymentMethod: method,
-          transactionId: paid ? txnId : "",
-          paymentDueDate: paid ? "" : dueDate,
+          transactionId: isCash ? "CASH" : (paid ? txnId : ""),
+          paymentDueDate: (!isCash && !paid) ? dueDate : "",
           paymentScreenshotUrl: shot || student.paymentScreenshotUrl || ""
         });
         setBusy(false);
