@@ -105,6 +105,26 @@ let onboardingPlans = [];
 const planForRecord = (s) =>
   s && s.planId ? onboardingPlans.find((p) => p.id === s.planId) || null : null;
 
+/**
+ * Checks whether a student's membership subscription is expired or overdue.
+ */
+export function isSubscriptionExpired(s) {
+  if (!s) return false;
+  if (s._isNewUser || s.approvalStatus === "Pending" || (s.status === "Pending" && !s.startDate)) {
+    return false;
+  }
+  if (s.status === "Inactive" || s.status === "Expired" || s.status === "Old" || s.status === "Old Student") {
+    return true;
+  }
+  const dueDateStr = s.paymentDueDate || s.endDate;
+  if (!dueDateStr) return false;
+  const due = new Date(dueDateStr);
+  if (isNaN(due.getTime())) return false;
+  due.setHours(23, 59, 59, 999);
+  const now = new Date();
+  return due < now;
+}
+
 export const initStudentPortalUI = () => {
   const portalSection = document.getElementById("page-student-portal");
   if (!portalSection) return;
@@ -269,8 +289,9 @@ export const initStudentPortalUI = () => {
       window.showToast("Profile still loading. Please wait a moment and try again.", "warning");
       return;
     }
-    if (currentStudent.status !== "Active") {
-      window.showToast("Membership is not active. Please clear dues or contact the desk.", "error");
+    if (currentStudent.status !== "Active" || isSubscriptionExpired(currentStudent)) {
+      window.showToast("Access Blocked: Your subscription has expired. Please renew your plan to check in.", "error");
+      if (typeof navigate === "function") navigate("student-payments");
       return;
     }
     // Fixed-seat (preferred) plans check straight in to the assigned seat —
@@ -613,13 +634,35 @@ window.handlePaymentSubmit = async () => {
     window.showToast(
       isCash
         ? "Cash Renewal Request Submitted! Please settle payment at the front desk."
-        : (window.t ? window.t('Payment Request Submitted Successfully!') || "Payment Request Submitted Successfully!" : "Payment Request Submitted Successfully!"),
+        : "Renewal Request Submitted! The admin will verify payment in their bank account and approve your access.",
       "success"
     );
     const txnInput = document.getElementById("payment-txnid");
     if (txnInput) txnInput.value = "";
     const ssInput = document.getElementById("payment-ss");
     if (ssInput) ssInput.value = "";
+
+    // Instantly add to local array so the pending approval card displays immediately
+    if (Array.isArray(currentPayments)) {
+      currentPayments.unshift({
+        id: "pending-" + Date.now(),
+        studentId: currentStudent?.id,
+        studentName: currentStudent?.name,
+        amount: Number(amount),
+        paymentMethod: isCash ? "Cash" : "UPI",
+        transactionId: txnId,
+        screenshot: screenshot,
+        paymentScreenshotUrl: screenshot,
+        source: "renewal",
+        status: "pending",
+        startDate,
+        endDate,
+        durationDays,
+        renewalMonths,
+        date: new Date().toISOString()
+      });
+      renderPortal();
+    }
   } else {
     window.showToast("Failed: " + res.error, "error");
   }
@@ -631,6 +674,11 @@ window.handlePaymentSubmit = async () => {
 };
 
   window.handleComplaintSubmit = async () => {
+    if (isSubscriptionExpired(currentStudent)) {
+      window.showToast("Access Blocked: Your subscription has expired. Please renew first.", "error");
+      if (typeof navigate === "function") navigate("student-payments");
+      return;
+    }
     const btn = document.getElementById("btn-submit-complaint");
     const category = document.getElementById("complaint-category").value;
     const description = document.getElementById("complaint-description").value;
@@ -658,6 +706,11 @@ window.handlePaymentSubmit = async () => {
   // page. Statuses + cancel live on the "My Seat" dashboard card below.
   window.openSeatChangeModal = async () => {
     if (!currentStudent) { window.showToast("Profile still loading.", "warning"); return; }
+    if (isSubscriptionExpired(currentStudent)) {
+      window.showToast("Access Blocked: Your subscription has expired. Please renew first.", "error");
+      if (typeof navigate === "function") navigate("student-payments");
+      return;
+    }
     if (!canChangeSeat) { window.showToast("Your plan does not include a fixed seat.", "warning"); return; }
     let modal = document.getElementById("seat-change-modal");
     if (!modal) {
@@ -1210,6 +1263,56 @@ const renderPortal = () => {
   const portalSection = document.getElementById("page-student-portal");
   const initials = s.name ? s.name.substring(0, 2).toUpperCase() : "ST";
   const daysRemaining = calculateDaysRemaining(s.paymentDueDate);
+  const isExpired = isSubscriptionExpired(s);
+  window.__studentSubscriptionExpired = isExpired;
+
+  const pendingPayment = (Array.isArray(currentPayments) ? currentPayments : []).find(p => p.status === "pending");
+  const latestRejectedPayment = (Array.isArray(currentPayments) ? currentPayments : []).find(p => p.status === "rejected" && (!pendingPayment || new Date(p.date || 0) > new Date(pendingPayment.date || 0)));
+
+  // If subscription was renewed by admin, show celebration toast
+  if (window.__lastStudentExpiredState === true && !isExpired) {
+    if (window.showToast) window.showToast("🎉 Subscription Renewed! Platform access restored.", "success");
+  }
+  window.__lastStudentExpiredState = isExpired;
+
+  // Sync sidebar / mobile navigation lock states
+  try {
+    const navAtt = document.querySelector('.nav-item[data-page="student-attendance"]');
+    const navComp = document.querySelector('.nav-item[data-page="student-complaints"]');
+    const navNotif = document.querySelector('.nav-item[data-page="notifications"]');
+    const navPay = document.querySelector('.nav-item[data-page="student-payments"]');
+    const mobAtt = document.querySelector('.mob-nav-item[data-page="student-attendance"]');
+    const mobComp = document.querySelector('.mob-nav-item[data-page="student-complaints"]');
+    const mobNotif = document.querySelector('.mob-nav-item[data-page="notifications"]');
+
+    if (isExpired) {
+      [navAtt, navComp, navNotif, mobAtt, mobComp, mobNotif].forEach(el => {
+        if (el) {
+          el.style.opacity = "0.45";
+          el.setAttribute("title", "Locked: Subscription expired");
+        }
+      });
+      if (navPay) {
+        let b = navPay.querySelector(".rn-lock-badge");
+        if (!b) {
+          b = document.createElement("span");
+          b.className = "rn-lock-badge";
+          b.style.cssText = "margin-left:auto; background:#dc2626; color:#fff; font-size:10px; font-weight:800; padding:2px 7px; border-radius:999px; text-transform:uppercase;";
+          b.textContent = "Renew 🔒";
+          navPay.appendChild(b);
+        }
+      }
+    } else {
+      [navAtt, navComp, navNotif, mobAtt, mobComp, mobNotif].forEach(el => {
+        if (el) {
+          el.style.opacity = "";
+          el.removeAttribute("title");
+        }
+      });
+      const b = navPay?.querySelector(".rn-lock-badge");
+      if (b) b.remove();
+    }
+  } catch (_) {}
 
   const activeSession = currentAttendance.find(r => r.status === "Active");
   const studyHours = calculateStudyHours(currentAttendance);
@@ -1376,7 +1479,7 @@ const renderPortal = () => {
       const pStatus = String(p.status || "pending").toUpperCase();
       const proofUrl = resolveRecordProof(p, s);
       const proofCell = isValidImg(proofUrl)
-        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
         : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
 
       paymentsHtml += `<tr><td>${pDate}</td><td>${pPeriod}</td><td>₹${resolveRecordAmount(p, s)}</td><td>${pTxn}</td><td><span class="badge ${badgeClass}">${pStatus}</span></td><td style="text-align:center;">${proofCell}</td></tr>`;
@@ -1449,7 +1552,7 @@ const renderPortal = () => {
       const dateStr = r.startDate || (r.createdAt && r.createdAt.seconds ? new Date(r.createdAt.seconds * 1000).toLocaleDateString() : "Admission");
       const proofUrl = resolveRecordProof(r, s);
       const proofCell = isValidImg(proofUrl)
-        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Renewal Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Renewal Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
         : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
       renewalsHtml += `
         <tr>
@@ -1524,7 +1627,7 @@ const renderPortal = () => {
       const badgeClass = isApproved ? "badge-paid" : (isRejected ? "badge-absent" : "badge-pending");
       const hasProof = isValidImg(item.proofUrl);
       const proofCell = hasProof
-        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${item.proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer;">👁 Proof</button>`
+        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${item.proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
         : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
 
       unifiedHistoryHtml += `
@@ -1545,7 +1648,11 @@ const renderPortal = () => {
   if (activeSession) {
     attendanceActionHtml = `<button id="btn-checkout" class="btn" style="background: #ef4444 !important; color: #ffffff !important; border: none; box-shadow: 0 1px 2px rgba(239,68,68,0.2);" onclick="window.handleCheckOut('${activeSession.id}', ${activeSession.checkIn})">Check-Out Now</button>`;
   } else {
-    attendanceActionHtml = `<button id="btn-checkin" class="btn" style="background: var(--primary) !important; color: #ffffff !important; border: none;" onclick="window.handleCheckIn()">Check-In Now</button>`;
+    attendanceActionHtml = isExpired
+      ? (pendingPayment
+          ? `<button class="btn btn-secondary" onclick="navigate('student-payments')" style="font-weight:600; display:inline-flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Verification Pending</button>`
+          : `<button class="btn btn-primary" onclick="navigate('student-payments')" style="background:#dc2626 !important; border:none; display:inline-flex; align-items:center; gap:6px; font-weight:700;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Renew to Check-in</button>`)
+      : `<button id="btn-checkin" class="btn" style="background: var(--primary) !important; color: #ffffff !important; border: none;" onclick="window.handleCheckIn()">Check-In Now</button>`;
   }
 
   // 1. DASHBOARD PAGE (Overview)
@@ -1814,12 +1921,12 @@ const renderPortal = () => {
           </div>
         </div>
         <div class="metric-card" style="align-items: center;">
-          <div class="metric-icon ${activeSession ? "emerald" : "amber"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+          <div class="metric-icon ${isExpired ? "red" : (activeSession ? "emerald" : "amber")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
           <div>
             <div class="metric-label">Right now</div>
-            <div class="metric-value" style="font-size:1.15rem;">${activeSession ? "Checked in" : "Not checked in"}</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: Seat ${s.seatNumber} (${s.seatFloor || 'Ground Floor'})` : "Pick any free seat at check-in")}</div>
-            ${canChangeSeat ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="margin-top:6px; font-size:0.75rem;">Change seat</button>` : ""}
+            <div class="metric-value" style="font-size:1.15rem; color:${isExpired ? "var(--danger)" : "inherit"};">${isExpired ? "Access Locked" : (activeSession ? "Checked in" : "Not checked in")}</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${isExpired ? "Subscription expired. Renew to check in." : (activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: Seat ${s.seatNumber} (${s.seatFloor || 'Ground Floor'})` : "Pick any free seat at check-in"))}</div>
+            ${(!isExpired && canChangeSeat) ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="margin-top:6px; font-size:0.75rem;">Change seat</button>` : ""}
           </div>
         </div>
         <div class="metric-card" style="align-items: center;">
@@ -1831,14 +1938,49 @@ const renderPortal = () => {
           </div>
         </div>
         <div class="metric-card" style="align-items: center;">
-          <div class="metric-icon ${dueUrgent ? "red" : "teal"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg></div>
+          <div class="metric-icon ${isExpired || dueUrgent ? "red" : "teal"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg></div>
           <div>
             <div class="metric-label">Subscription</div>
-            <div class="metric-value" style="font-size:1.15rem; color:${dueUrgent ? "var(--danger)" : "inherit"};">${subscriptionLeft}</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">Due ${dueLabel} · ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}${pendingPayments.length ? ` · ${pendingPayments.length} payment${pendingPayments.length > 1 ? "s" : ""} pending` : " · all clear"}</div>
+            <div class="metric-value" style="font-size:1.15rem; color:${isExpired || dueUrgent ? "var(--danger)" : "inherit"};">${isExpired ? "Expired" : subscriptionLeft}</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${isExpired ? `Ended ${dueLabel} · Access locked` : `Due ${dueLabel} · ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}${pendingPayments.length ? ` · ${pendingPayments.length} pending` : " · all clear"}`}</div>
           </div>
         </div>
       </div>
+
+      ${isExpired ? `
+        ${pendingPayment ? `
+          <div class="sp-alert sp-alert-warn" style="margin-top:1.25rem; padding:16px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(245,158,11,0.14), rgba(217,119,6,0.06)); border:1.5px solid rgba(245,158,11,0.4); display:flex; gap:16px; align-items:flex-start;">
+            <div style="width:36px; height:36px; border-radius:50%; background:rgba(245,158,11,0.2); color:var(--accent-amber, #f59e0b); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-weight:700; font-size:15px; color:var(--text-primary); margin-bottom:4px;">Renewal Request Submitted — Awaiting Admin Verification</div>
+              <div style="font-size:13px; color:var(--text-secondary); line-height:1.5;">
+                We received your renewal payment of <strong style="color:var(--text-primary);">₹${pendingPayment.amount}</strong> via <strong>${pendingPayment.paymentMethod || 'UPI'}</strong> (UTR: <code style="font-family:monospace; background:var(--bg-card); padding:2px 6px; border-radius:4px; font-weight:700; border:1px solid var(--border);">${pendingPayment.transactionId}</code>). The admin is verifying the credit in the bank account against your uploaded proof. Once approved, your platform access and seat will be immediately restored.
+              </div>
+              <div style="margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <span class="badge" style="background:rgba(245,158,11,0.18); color:var(--accent-amber, #fbbf24); border:1px solid rgba(245,158,11,0.35); font-weight:700; padding:4px 10px; border-radius:999px; font-size:11.5px;">Status: Bank Verification Pending</span>
+                <button class="btn btn-ghost btn-sm" onclick="navigate('student-payments')" style="font-size:12px; padding:4px 12px; border:1px solid var(--border); border-radius:6px; color:var(--text-primary);">View Status on Payments Page</button>
+              </div>
+            </div>
+          </div>
+        ` : `
+          <div class="sp-alert sp-alert-bad" style="margin-top:1.25rem; padding:16px 20px; border-radius:14px; display:flex; gap:16px; align-items:flex-start;">
+            <div style="width:36px; height:36px; border-radius:50%; background:rgba(239,68,68,0.18); color:var(--danger, #f43f5e); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-weight:700; font-size:15px; color:var(--danger); margin-bottom:4px;">Platform Access Locked — Subscription Expired</div>
+              <div style="font-size:13px; color:var(--text-secondary); line-height:1.5;">
+                Your subscription finished on <strong style="color:var(--text-primary);">${dueLabel}</strong>. To access study hall facilities and check-in, please pay your debt / submit your renewal request.
+              </div>
+              <div style="margin-top:12px;">
+                <button class="btn btn-primary" onclick="navigate('student-payments')" style="font-size:13px; font-weight:700; padding:8px 18px; border-radius:8px; background:var(--danger, #f43f5e); border:none; color:#fff;">Pay Debt & Renew Subscription Now →</button>
+              </div>
+            </div>
+          </div>
+        `}
+      ` : ''}
       
       <div class="dashboard-grid" style="margin-top: 1.25rem;">
         <div class="card">
@@ -1912,6 +2054,87 @@ const renderPortal = () => {
   const renewSeatVal = s.seatNumber || s.seatAssigned || "";
   const renewFloorVal = s.seatFloor || s.floor || (renewSeatVal ? "Ground Floor" : "");
   const renewSeatText = renewSeatVal ? ` · Seat ${renewSeatVal} (${renewFloorVal})` : "";
+  const paymentsPageBannerHtml = (() => {
+    if (pendingPayment) {
+      const pProof = pendingPayment.screenshot || pendingPayment.paymentScreenshotUrl || null;
+      return `
+        <div class="card" style="margin-bottom:1.25rem; padding:18px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(245,158,11,0.12), rgba(217,119,6,0.05)); border:1.5px solid rgba(245,158,11,0.38);">
+          <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+            <div style="width:36px; height:36px; border-radius:50%; background:rgba(245,158,11,0.2); color:var(--accent-amber, #f59e0b); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div style="flex:1; min-width:260px;">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+                <h3 style="margin:0; font-size:1.05rem; font-weight:700; color:var(--text-primary);">Renewal Request Under Verification</h3>
+                <span class="badge" style="background:rgba(245,158,11,0.18); color:var(--accent-amber, #fbbf24); border:1px solid rgba(245,158,11,0.35); font-weight:700; padding:3px 10px; border-radius:999px; font-size:12px;">Bank Verification Pending</span>
+              </div>
+              <div style="font-size:13.5px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                We received your payment of <strong style="color:var(--text-primary);">₹${pendingPayment.amount}</strong> via <strong>${pendingPayment.paymentMethod || 'UPI'}</strong> (Txn/UTR: <code style="font-family:monospace; background:var(--bg-card); padding:2px 7px; border-radius:4px; font-weight:700; border:1px solid var(--border);">${pendingPayment.transactionId || '—'}</code>).
+              </div>
+              <div style="padding:10px 14px; background:rgba(245,158,11,0.08); border-radius:8px; border-left:3px solid var(--accent-amber, #f59e0b); font-size:12.5px; color:var(--text-secondary); line-height:1.45;">
+                <strong style="color:var(--text-primary);">Admin Verification Process:</strong> The administrator is currently checking the credit in their bank account and validating your screenshot proof. Once verified and approved, your subscription will be renewed and platform check-in will be automatically unblocked.
+              </div>
+              ${pProof ? `
+                <div style="margin-top:10px;">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${String(pProof).replace(/'/g, "\\'")}', 'Uploaded Payment Proof')" style="font-size:12px; font-weight:600; padding:4px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; color:var(--primary);">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> View Uploaded Proof Screenshot
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (latestRejectedPayment) {
+      const rejectReason = latestRejectedPayment.rejectionReason || latestRejectedPayment.remark || "Payment could not be verified in bank account or invalid proof uploaded.";
+      return `
+        <div class="card" style="margin-bottom:1.25rem; padding:18px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(239,68,68,0.1), rgba(220,38,38,0.04)); border:1.5px solid rgba(239,68,68,0.35);">
+          <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+            <div style="width:36px; height:36px; border-radius:50%; background:rgba(239,68,68,0.18); color:var(--danger, #f43f5e); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            </div>
+            <div style="flex:1; min-width:260px;">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+                <h3 style="margin:0; font-size:1.05rem; font-weight:700; color:var(--danger);">Previous Renewal Request Not Approved</h3>
+                <span class="badge" style="background:rgba(239,68,68,0.18); color:var(--danger, #f87171); border:1px solid rgba(239,68,68,0.35); font-weight:700; padding:3px 10px; border-radius:999px; font-size:12px;">Verification Failed</span>
+              </div>
+              <div style="font-size:13.5px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                Your previous renewal payment of <strong style="color:var(--text-primary);">₹${latestRejectedPayment.amount}</strong> was rejected by admin.
+              </div>
+              <div style="padding:10px 14px; background:rgba(239,68,68,0.08); border-radius:8px; border-left:3px solid var(--danger); font-size:13px; color:var(--danger); font-weight:600; margin-bottom:10px;">
+                Reason: "${rejectReason}"
+              </div>
+              <div style="font-size:12.5px; color:var(--text-muted); line-height:1.45;">
+                Please verify the debit in your bank / UPI app, make sure you copy the exact 12-digit UTR/Transaction ID, upload a clear screenshot of the completed transaction, and re-submit below.
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (isExpired) {
+      return `
+        <div class="card" style="margin-bottom:1.25rem; padding:18px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(239,68,68,0.09), rgba(185,28,28,0.03)); border:1.5px solid rgba(239,68,68,0.3);">
+          <div style="display:flex; gap:16px; align-items:flex-start;">
+            <div style="width:36px; height:36px; border-radius:50%; background:rgba(239,68,68,0.18); color:var(--danger, #f43f5e); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div style="flex:1;">
+              <h3 style="margin:0 0 6px 0; font-size:1.05rem; font-weight:700; color:var(--danger);">Platform Access Locked — Subscription Expired</h3>
+              <div style="font-size:13.5px; color:var(--text-secondary); line-height:1.5;">
+                Your subscription ended on <strong style="color:var(--text-primary);">${s.paymentDueDate ? new Date(s.paymentDueDate).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : 'recently'}</strong>. All platform facilities (check-in, complaints, attendance) are locked. Please submit your renewal payment below so the admin can verify bank credit and restore your access.
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return "";
+  })();
 
   // 2. PAYMENTS PAGE
   document.getElementById("page-student-payments").innerHTML = `
@@ -1924,6 +2147,8 @@ const renderPortal = () => {
     
     <div class="sp-stack">
       <div class="sp-stack" style="margin-top:0;">
+        ${paymentsPageBannerHtml}
+
         <!-- Submit Payment Request -->
         <div class="card sp-renew-card">
           <div style="display: flex; align-items: center; margin-bottom: 1.5rem; gap: 0.75rem; color: var(--primary);">

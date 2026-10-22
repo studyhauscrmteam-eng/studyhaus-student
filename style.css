@@ -25,6 +25,10 @@
   --accent-amber: #f59e0b;
   --accent-blue: #3b82f6;
 
+  --danger: #f43f5e;
+  --warning: #f59e0b;
+  --success: #10b981;
+
   --sidebar-w: 240px;
 }
 
@@ -41,6 +45,10 @@ body.light-mode {
   --text-muted: #94a3b8;
 
   --primary: #1e3a8a;
+
+  --danger: #e11d48;
+  --warning: #b45309;
+  --success: #15803d;
 }
 
 /* Base utility classes for themes */

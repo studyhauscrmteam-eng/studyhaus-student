@@ -47,6 +47,28 @@ function navigate(page) {
       return;
     }
   }
+  // Subscription Expiry Gate: If subscription is finished/debt, access is locked except Payments/Renewals
+  if (window.__studentSubscriptionExpired && window.localStorage?.getItem("userRole") === "Student") {
+    if (page !== "student-payments") {
+      if (typeof showToast === 'function') {
+        showToast("Access Locked: Your subscription has expired. Please renew your plan to restore platform access.", "warning");
+      }
+      try {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById('page-student-payments')?.classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(item => {
+          item.classList.remove('active');
+          if (item.getAttribute('data-page') === 'student-payments') item.classList.add('active');
+        });
+        document.querySelectorAll('.mob-nav-item').forEach(item => {
+          item.classList.remove('active');
+          if (item.getAttribute('data-page') === 'student-payments') item.classList.add('active');
+        });
+      } catch (_) {}
+      return;
+    }
+  }
+
   // SPA Authorization check
   const role = localStorage.getItem("userRole");
   if (role === "Employee") {
