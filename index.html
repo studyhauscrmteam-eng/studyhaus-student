@@ -3,13 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="refresh" content="0; url=login.html" />
-  <title>Studyhaus Student Portal</title>
+  <link rel="icon" type="image/png" href="./icon-192.png" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#983132" />
+  <title>Shreeji Reading Library — Student Portal</title>
   <script>
-    window.location.replace("login.html");
+    (function() {
+      try {
+        var uid = localStorage.getItem("userId");
+        var role = localStorage.getItem("userRole");
+        if (uid && role === "Student") {
+          window.location.replace("student/dashboard.html");
+          return;
+        }
+      } catch (e) {}
+      window.location.replace("login.html");
+    })();
   </script>
 </head>
 <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
-  <p style="color: #64748b;">Redirecting to <a href="login.html" style="color: #0284c7;">Login</a>...</p>
+  <p style="color: #64748b;">Opening Shreeji Reading Library...</p>
 </body>
 </html>

@@ -1,8 +1,11 @@
-import { listenToStudentPortalData, updateStudentOwnProfile } from "./studentPortalService.js";
+import { listenToStudentPortalData, updateStudentOwnProfile, submitProfileUpdateRequest, listenToMyProfileUpdateRequests } from "./studentPortalService.js";
 import { listenToMyAttendance, checkIn, checkOut } from "./attendanceService.js";
 import { calculateStudyHours } from "./studyHourCalculator.js";
-import { generateAttendancePDF } from "./pdfService.js";
+import { generateAttendancePDF, generateInvoicePDF } from "./pdfService.js";
 import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
+import { openProofViewer } from "./proofViewer.js";
+import { changeUserPassword } from "./authService.js";
+import { auth } from "../firebase/firebase.js";
 
 // ── Payment screenshot: compress single proof image to ≤200k-char data-URL ────
 // Mandatory proof for payments — exactly 1 screenshot per payment.
@@ -42,38 +45,79 @@ const collectPaymentScreenshot = async () => {
   return await compressPaymentScreenshot(f);
 };
 
-// Global proof preview modal for student portal
-window.viewStudentProofModal = (dataUrl, title = "Payment Screenshot Proof") => {
-  const isValidImage = (u) => typeof u === "string" && (u.startsWith("data:image/") || u.startsWith("http://") || u.startsWith("https://") || u.startsWith("blob:"));
-  if (!isValidImage(dataUrl)) {
-    if (window.showToast) window.showToast("No valid screenshot proof attached.", "warning");
+// Global document preview and enlarge lightbox modal with zoom and rotate
+window.enlargeDocument = (src, title = "Document Preview") => {
+  if (!src) {
+    if (window.showToast) window.showToast("No document preview available.", "warning");
     return;
   }
-  const old = document.getElementById("student-proof-modal");
-  if (old) old.remove();
+  openProofViewer({ sources: [src], title });
+};
 
-  const dialog = document.createElement("dialog");
-  dialog.id = "student-proof-modal";
-  dialog.className = "card smooth-modal";
-  dialog.style.cssText = "border:none; border-radius:14px; padding:0; box-shadow:0 18px 45px rgba(0,0,0,0.5); background:var(--bg-card); color:var(--text-primary); width:min(560px, 94vw); margin:auto;";
-  dialog.innerHTML = `
-    <div style="padding:1.25rem 1.5rem;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.75rem;">
-        <h3 style="margin:0; font-size:1.05rem; font-weight:700;">${title}</h3>
-        <button class="btn btn-ghost" id="spm-close" style="padding:0.25rem 0.5rem; font-size:1.1rem; line-height:1; cursor:pointer;">✕</button>
-      </div>
-      <div style="text-align:center; background:var(--bg-hover); border-radius:10px; overflow:hidden; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; min-height:220px; max-height:65vh; padding:10px;">
-        <img src="${dataUrl}" alt="Proof" onerror="this.onerror=null; this.parentElement.innerHTML='<div style=\\'padding:2.5rem; color:var(--text-muted); font-size:13px; text-align:center;\\'>⚠️ Screenshot proof could not be loaded</div>';" style="width:100%; height:auto; max-height:65vh; object-fit:contain; display:block; border-radius:8px;" />
-      </div>
-      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
-        <a class="btn btn-primary" download="payment-proof.jpg" href="${dataUrl}" style="text-decoration:none; padding:7px 16px; font-size:13px;">Download Proof</a>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(dialog);
-  dialog.querySelector("#spm-close").onclick = () => dialog.close();
-  dialog.addEventListener("close", () => dialog.remove());
-  dialog.showModal();
+// Global proof preview modal for student portal
+window.viewStudentProofModal = (dataUrl, title = "Payment Screenshot Proof") => {
+  window.enlargeDocument(dataUrl, title);
+};
+
+// Global E-Invoice download helper for students
+window.downloadStudentInvoice = async (id, planName, amount, date, mode, period, txnId) => {
+  const live = currentStudent || {};
+  try {
+    if (window.showToast) window.showToast("Generating e-invoice PDF...", "info");
+    const cleanId = id ? String(id).replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase() : Date.now().toString().slice(-8);
+    const authEmail = auth?.currentUser?.email;
+    const realEmail = live.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || live.authEmail || "";
+    const res = await generateInvoicePDF({
+      invoiceNo: `INV-${cleanId}`,
+      date: date || new Date().toLocaleDateString('en-GB'),
+      studentName: live.name || "Student",
+      studentId: live.studentId || live.admissionNo || "—",
+      studentPhone: live.phone || "—",
+      studentEmail: realEmail,
+      seatNumber: live.seatNumber || live.seatAssigned || "",
+      seatFloor: live.seatFloor || live.floor || "",
+      planName: planName || live.planName || "Reading Membership",
+      period: period || "Monthly",
+      amount: amount || 0,
+      paymentMode: mode || live.paymentMethod || "UPI",
+      transactionId: txnId || live.transactionId || "—"
+    });
+    if (res && res.success) {
+      if (window.showToast) window.showToast("E-Invoice downloaded successfully!", "success");
+    } else {
+      if (window.showToast) window.showToast("Failed to generate invoice: " + (res?.error || "Unknown"), "error");
+    }
+  } catch (err) {
+    console.error("Download student invoice error:", err);
+    if (window.showToast) window.showToast("Error generating invoice: " + err.message, "error");
+  }
+};
+
+// Global Download QR & Copy UPI helpers for renewal payment
+window.downloadPaymentQr = () => {
+  const img = document.querySelector(".sp-qr .payment-qr-img") || document.querySelector(".payment-qr-img");
+  if (!img || !img.src) {
+    if (window.showToast) window.showToast("QR code image not loaded yet.", "warning");
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = img.src;
+  a.download = "Shreeji_Library_Payment_QR.png";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  if (window.showToast) window.showToast("Downloading payment QR code...", "success");
+};
+
+window.copyLibraryUpi = async () => {
+  try {
+    const s = await getSettings();
+    const upiId = s?.libraryUpiId || s?.upiId || "shreejilibrary@upi";
+    await navigator.clipboard.writeText(upiId);
+    if (window.showToast) window.showToast(`UPI ID copied: ${upiId}`, "success");
+  } catch (e) {
+    if (window.showToast) window.showToast("Failed to copy UPI ID", "error");
+  }
 };
 import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
@@ -176,6 +220,27 @@ export const initStudentPortalUI = () => {
       .catch((e) => console.warn("[portal] plans:", e));
 
   unsubscribePortal = listenToStudentPortalData(async (studentData) => {
+    if (!studentData) return;
+
+    if (
+      studentData.portalAccessDisabled === true ||
+      studentData.status === "Old" ||
+      studentData.status === "Old Student" ||
+      studentData.status === "disabled" ||
+      studentData.status === "Inactive" ||
+      studentData.loginRevoked === true
+    ) {
+      try {
+        localStorage.removeItem("userRole");
+        localStorage.removeItem("userId");
+        localStorage.removeItem("userName");
+        const { logout } = await import("./authService.js");
+        await logout();
+      } catch (_) {}
+      window.location.href = "/login.html";
+      return;
+    }
+
     if (!studentData._documents || !studentData._documents.paymentScreenshot) {
       try {
         const docSnap = await getDoc(doc(db, "studentDocuments", studentData.id));
@@ -256,6 +321,12 @@ export const initStudentPortalUI = () => {
     try { const boot = document.getElementById("portal-boot"); if (boot) boot.style.display = "none"; } catch (_) {}
   });
 
+  window.addEventListener('languageChanged', () => {
+    if (currentStudent) {
+      renderPortal();
+    }
+  });
+
   // Shared check-in executor — used by the seat-picker modal AND the direct
   // assigned-seat path. Manages the visible button and toasts.
   const runCheckIn = async (selectedSeatNumber, selectedSeatFloor = null) => {
@@ -269,7 +340,12 @@ export const initStudentPortalUI = () => {
     try {
       const res = await checkIn(currentStudent, selectedSeatNumber, selectedSeatFloor);
       if (!res.success) {
-        window.showToast("Check-In Failed: " + res.error, "error");
+        if (res.conflict) {
+          window.showToast(res.error, "warning");
+          window.alert(res.error);
+        } else {
+          window.showToast("Check-In Failed: " + res.error, "error");
+        }
       } else if (res.warning) {
         window.showToast("Checked in! " + res.warning, "warning");
         if (modal && modal.open) modal.close();
@@ -317,11 +393,22 @@ export const initStudentPortalUI = () => {
     if (numInput) numInput.value = "";
     if (idInput) idInput.value = "";
 
-    // Show modal and initialize seat map
+    // Show modal and initialize seat map locked to student's category
     if (!modal.open) modal.showModal();
     try {
+      const isPremium = currentStudent && (
+        currentStudent.libraryType === "Shreeji Premium Reading Library" ||
+        (currentStudent.seatFloor && currentStudent.seatFloor.toLowerCase().includes("first")) ||
+        (currentStudent.planName && currentStudent.planName.toLowerCase().includes("premium"))
+      );
+      const targetFloor = isPremium ? "First Floor" : "Ground Floor";
       const { initSeatMapUI } = await import("./seatMapUI.js");
-      await initSeatMapUI("signup", "checkin-seat-selection-section", { context: "checkin" });
+      await initSeatMapUI("signup", "checkin-seat-selection-section", {
+        context: "checkin",
+        floor: targetFloor,
+        lockFloor: true,
+        isPremium: isPremium
+      });
     } catch (e) {
       console.warn("[portal] seat map failed:", e);
       window.showToast("Could not load seat map: " + (e.message || e), "error");
@@ -814,6 +901,26 @@ window.handlePaymentSubmit = async () => {
  */
 const syncStudentChrome = (s, photoUrl, notifCount) => {
   try {
+    const isPremium = s && (
+      s.libraryType === "Shreeji Premium Reading Library" ||
+      (s.seatFloor && s.seatFloor.toLowerCase().includes("first")) ||
+      (s.planName && s.planName.toLowerCase().includes("premium"))
+    );
+    const libName = isPremium ? "Shreeji Premium Library" : "Shreeji Reading Library";
+
+    // Dynamic page title matching category
+    document.title = `${libName} — Student Portal`;
+
+    // Dynamic sidebar title
+    const sidebarLogoName = document.querySelector(".sidebar-logo .logo-text div:first-child");
+    const sidebarLogoSub = document.querySelector(".sidebar-logo .logo-text div:last-child");
+    if (sidebarLogoName) sidebarLogoName.textContent = libName;
+    if (sidebarLogoSub) {
+      sidebarLogoSub.innerHTML = isPremium
+        ? `<span style="color:#d97706; font-weight:700;">⭐ Premium Student Portal</span>`
+        : `Student Portal`;
+    }
+
     const name = s.name || "Student";
     const initials = name.substring(0, 2).toUpperCase();
     const avatarInner = photoUrl
@@ -830,8 +937,16 @@ const syncStudentChrome = (s, photoUrl, notifCount) => {
 
     const nameEl = document.getElementById("current-user-name");
     const topbarNameEl = document.getElementById("topbar-user-name");
-    if (nameEl) nameEl.textContent = name;
-    if (topbarNameEl) topbarNameEl.textContent = name;
+    if (nameEl) {
+      nameEl.innerHTML = isPremium
+        ? `${name} <span style="font-size:9.5px; font-weight:800; padding:1px 6px; border-radius:999px; background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; vertical-align:middle; letter-spacing:0.04em;">PREMIUM</span>`
+        : name;
+    }
+    if (topbarNameEl) {
+      topbarNameEl.innerHTML = isPremium
+        ? `${name} <span style="font-size:9.5px; font-weight:800; padding:1px 6px; border-radius:999px; background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; vertical-align:middle; letter-spacing:0.04em;">PREMIUM</span>`
+        : name;
+    }
 
     const search = document.querySelector(".topbar-search");
     if (search) search.style.display = "none";
@@ -844,7 +959,7 @@ const syncStudentChrome = (s, photoUrl, notifCount) => {
 // to mistake late-arriving OLD items for fresh ones. Now we (a) persist seen
 // ids across refreshes, (b) ignore the first 6s of batched loads, and (c) only
 // ever consider UNREAD ids as candidates for "new".
-const S_BASE_TITLE = (typeof document !== "undefined" && document.title) || "Studyhaus";
+const S_BASE_TITLE = (typeof document !== "undefined" && document.title) || "Shreeji Library";
 let __sNotifFirst = true;
 let __sKnownIds = new Set();
 let __sBootAt = Date.now();
@@ -1019,6 +1134,7 @@ const renderStudentNotifications = () => {
   const pendings = (Array.isArray(currentPayments) ? currentPayments : []).filter(p => p.status === "pending");
   const opens = (Array.isArray(currentComplaints) ? currentComplaints : []).filter(c => c.status === "Pending" || c.status === "In Progress");
   const replied = opens.filter(c => c.resolutionNote);
+  const resolved = (Array.isArray(currentComplaints) ? currentComplaints : []).filter(c => c.status === "Resolved" || c.status === "Closed");
   const active = (Array.isArray(currentAttendance) ? currentAttendance : []).find(r => r.status === "Active");
 
   const isRead = (id) => {
@@ -1041,6 +1157,17 @@ const renderStudentNotifications = () => {
       <div class="notif-icon amber">${notifIconFor("info").svg}</div>
       <div class="notif-content"><div class="notif-title">Payment ₹${Number(p.amount) || 0} awaiting approval</div>
       <div class="notif-body">Txn ${escNotif(p.transactionId || "—")} · submitted ${p.date ? new Date(p.date).toLocaleDateString() : "recently"}. The desk will approve it shortly.</div></div></div>`;
+  });
+  // Resolved complaint alert with green check
+  resolved.slice(0, 5).forEach(c => {
+    personal += `<div class="notif-item unread" data-notif-id="cresolved_${c.id}" title="Click to dismiss">
+      <div class="notif-icon emerald">${notifIconFor("success").svg}</div>
+      <div class="notif-content">
+        <div class="notif-title" style="color:var(--accent-emerald, #10b981); font-weight:700;">Complaint Solved: ${escNotif(c.category || "General")}</div>
+        <div class="notif-body">Your complaint has been marked as resolved! ${c.resolutionNote ? `Resolution Note: "${escNotif(c.resolutionNote)}"` : (c.resolvedBy ? `Resolved by ${escNotif(c.resolvedBy)}.` : "Staff has completed this request.")}</div>
+        <div class="sp-notif-actions"><button class="btn btn-ghost btn-sm" onclick="navigate('student-complaints')">View Complaints</button></div>
+      </div>
+    </div>`;
   });
   replied.forEach(c => {
     personal += `<div class="notif-item unread" data-notif-id="creply_${c.id}" title="Click to dismiss">
@@ -1081,8 +1208,16 @@ const renderStudentNotifications = () => {
     if (!annLive(a)) return false;
     const aud = a.audience || "All Students";
     if (aud === "Staff") return false;
-    if (aud === "Specific Students") return Array.isArray(a.targetStudentIds) && a.targetStudentIds.includes(s.id);
-    if (aud === "Active Students Only") return s.status === "Active";
+    if (aud === "Specific Students") {
+      if (!Array.isArray(a.targetStudentIds)) return false;
+      return (
+        a.targetStudentIds.includes(s.id) ||
+        (s.uid && a.targetStudentIds.includes(s.uid)) ||
+        (s.studentId && a.targetStudentIds.includes(s.studentId)) ||
+        (s.admissionNo && a.targetStudentIds.includes(s.admissionNo))
+      );
+    }
+    if (aud === "Active Students Only" || aud === "Active Students") return s.status === "Active";
     return true;
   });
 
@@ -1108,6 +1243,7 @@ const renderStudentNotifications = () => {
     const ids = [];
     if (monthsOwed > 0) ids.push("due");
     pendings.slice(0, 3).forEach(p => ids.push(`pay_${p.id}`));
+    resolved.slice(0, 5).forEach(c => ids.push(`cresolved_${c.id}`));
     replied.forEach(c => ids.push(`creply_${c.id}`));
     opens.filter(c => !c.resolutionNote).slice(0, 2).forEach(c => ids.push(`copen_${c.id}`));
     if (active) ids.push(`active_${active.id}`);
@@ -1118,6 +1254,7 @@ const renderStudentNotifications = () => {
   // Badge counts unread personal items + unread desk announcements.
   const unreadPersonal = (monthsOwed > 0 && !isRead("due") ? 1 : 0)
     + pendings.filter(p => !isRead(`pay_${p.id}`)).length
+    + resolved.filter(c => !isRead(`cresolved_${c.id}`)).length
     + opens.filter(c => !isRead(c.resolutionNote ? `creply_${c.id}` : `copen_${c.id}`)).length;
   const unreadBroadcast = visible.filter(a => !isRead(`ann_${a.id}`)).length;
   const totalUnread = unreadPersonal + unreadBroadcast;
@@ -1135,6 +1272,7 @@ const renderStudentNotifications = () => {
   const currentIds = [];
   if (monthsOwed > 0 && !isRead("due")) currentIds.push("due");
   pendings.forEach(p => { if (!isRead(`pay_${p.id}`)) currentIds.push(`pay_${p.id}`); });
+  resolved.forEach(c => { if (!isRead(`cresolved_${c.id}`)) currentIds.push(`cresolved_${c.id}`); });
   opens.forEach(c => {
     const oid = c.resolutionNote ? `creply_${c.id}` : `copen_${c.id}`;
     if (!isRead(oid)) currentIds.push(oid);
@@ -1489,20 +1627,50 @@ const renderPortal = () => {
   // Complaints HTML Generation
   let complaintsHtml = "";
   if (currentComplaints.length === 0) {
-    complaintsHtml = `<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">No complaints history.</td></tr>`;
+    complaintsHtml = `
+      <div style="text-align:center; padding:2.5rem 1rem; color:var(--text-muted);">
+        <div style="width:44px; height:44px; border-radius:12px; background:var(--bg-hover); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem; color:var(--text-muted);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div style="font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">No Complaints Reported</div>
+        <div style="font-size:0.85rem;">Facing any problem with WiFi, lights, noise, or facilities? Submit a ticket above.</div>
+      </div>`;
   } else {
     currentComplaints.forEach(c => {
       let badgeClass = "badge-pending";
       if (c.status === "Resolved" || c.status === "Closed") badgeClass = "badge-paid";
       if (c.status === "In Progress") badgeClass = "badge-info";
-      const resNote = c.resolutionNote ? `<br><small style="color:var(--text-muted)"><i>Admin: ${c.resolutionNote}</i></small>` : "";
+
+      const resolutionBlock = (c.resolutionNote || c.status === "Resolved" || c.status === "Closed") ? `
+        <div class="sp-resolution-box" style="margin-top:0.75rem; padding:12px 14px; border-radius:10px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.25); display:flex; flex-direction:column; gap:4px;">
+          <div style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:12.5px; color:#10b981;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Admin Resolution Response
+            ${c.resolvedAt ? `<span style="font-weight:normal; font-size:11px; color:var(--text-muted); margin-left:auto;">${new Date(c.resolvedAt).toLocaleDateString()}</span>` : ''}
+          </div>
+          <div style="font-size:13px; color:var(--text-primary); line-height:1.5; font-weight:500;">
+            ${c.resolutionNote || "Your issue has been reviewed and resolved by desk management."}
+          </div>
+        </div>
+      ` : `
+        <div style="margin-top:0.6rem; font-size:12px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+          <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:#f59e0b;"></span>
+          Under review by library management — an admin response will appear here.
+        </div>
+      `;
+
       complaintsHtml += `
-        <tr>
-          <td>${new Date(c.date).toLocaleDateString()}</td>
-          <td>${c.category}</td>
-          <td>${c.description}${resNote}</td>
-          <td><span class="badge ${badgeClass}">${c.status}</span></td>
-        </tr>`;
+        <div class="sp-complaint-card" style="margin-bottom:0.85rem; padding:1.15rem; border:1px solid var(--border); border-radius:12px; background:var(--bg-card); transition:border-color 0.2s;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="badge" style="background:rgba(59,130,246,0.12); color:#3b82f6; font-weight:700; font-size:11.5px; padding:3px 9px; border-radius:6px;">${c.category || 'General'}</span>
+              <span style="font-size:12px; color:var(--text-muted);">${c.date ? new Date(c.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span>
+            </div>
+            <span class="badge ${badgeClass}" style="font-weight:700; font-size:12px; padding:3px 10px; border-radius:999px;">${c.status || 'Pending'}</span>
+          </div>
+          <div style="font-size:13.5px; color:var(--text-secondary); line-height:1.5; white-space:pre-wrap;">${c.description || '—'}</div>
+          ${resolutionBlock}
+        </div>`;
     });
   }
 
@@ -1573,6 +1741,7 @@ const renderPortal = () => {
     const rPeriod = (r.startDate && r.endDate) ? `${r.startDate} to ${r.endDate}` : "Admission";
     const rAmount = resolveRecordAmount(r, s);
     const rTxn = String(r.transactionId || s.transactionId || "ADMISSION").trim().toUpperCase();
+    const rMode = r.paymentMethod || r.paymentMode || r.mode || s.paymentMethod || "UPI";
     const rKey = `${rDate}_${rPeriod}_${rAmount}_${rTxn}`;
     if (!unifiedMap.has(rKey)) {
       unifiedMap.set(rKey, {
@@ -1581,6 +1750,7 @@ const renderPortal = () => {
         plan: r.newPlan || s.planName || "Membership Plan",
         period: rPeriod,
         amount: rAmount,
+        mode: rMode,
         txnId: rTxn,
         status: (r.status || "APPROVED").toUpperCase(),
         proofUrl: resolveRecordProof(r, s)
@@ -1593,6 +1763,7 @@ const renderPortal = () => {
     const pPeriod = p.monthLabel || "Admission";
     const pAmount = resolveRecordAmount(p, s);
     const pTxn = String(p.transactionId || "").trim().toUpperCase();
+    const pMode = p.paymentMethod || p.paymentMode || p.mode || "UPI";
     const pKey = `${pDate}_${pPeriod}_${pAmount}_${pTxn}`;
 
     const isCovered = Array.from(unifiedMap.values()).some(u => 
@@ -1608,6 +1779,7 @@ const renderPortal = () => {
         plan: p.planName || s.planName || "Admission",
         period: pPeriod,
         amount: pAmount,
+        mode: pMode,
         txnId: pTxn || "—",
         status: String(p.status || "approved").toUpperCase(),
         proofUrl: resolveRecordProof(p, s)
@@ -1619,7 +1791,7 @@ const renderPortal = () => {
 
   let unifiedHistoryHtml = "";
   if (unifiedItems.length === 0) {
-    unifiedHistoryHtml = `<tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding:2rem;">No payment or renewal history found.</td></tr>`;
+    unifiedHistoryHtml = `<tr><td colspan="9" style="text-align:center; color: var(--text-muted); padding:2rem;">No payment or renewal history found.</td></tr>`;
   } else {
     unifiedItems.forEach(item => {
       const isApproved = item.status === "APPROVED" || item.status === "COMPLETED";
@@ -1630,14 +1802,20 @@ const renderPortal = () => {
         ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${item.proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
         : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
 
+      const invoiceCell = isApproved
+        ? `<button type="button" class="btn btn-secondary btn-sm" onclick="window.downloadStudentInvoice('${item.id}', '${item.plan.replace(/'/g, "\\'")}', ${item.amount}, '${item.date}', '${item.mode}', '${item.period}', '${item.txnId}')" style="padding:3px 8px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Invoice</button>`
+        : `<span style="font-size:11px; color:var(--text-muted); font-style:italic;">Pending Approval</span>`;
+
       unifiedHistoryHtml += `
         <tr>
           <td>${item.date}</td>
           <td><strong>${item.plan}</strong></td>
           <td style="font-size:0.85rem; color:var(--text-secondary);">${item.period}</td>
           <td class="amount">₹${item.amount}</td>
+          <td><span class="badge" style="background:var(--bg-hover); color:var(--text-primary); font-size:11.5px; font-weight:600; border:1px solid var(--border);">${item.mode || 'UPI'}</span></td>
           <td style="font-size:0.85rem; font-family:monospace;">${item.txnId}</td>
           <td><span class="badge ${badgeClass}">${item.status}</span></td>
+          <td>${invoiceCell}</td>
           <td style="text-align:center;">${proofCell}</td>
         </tr>
       `;
@@ -1645,14 +1823,15 @@ const renderPortal = () => {
   }
 
   let attendanceActionHtml = "";
+  const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
   if (activeSession) {
-    attendanceActionHtml = `<button id="btn-checkout" class="btn" style="background: #ef4444 !important; color: #ffffff !important; border: none; box-shadow: 0 1px 2px rgba(239,68,68,0.2);" onclick="window.handleCheckOut('${activeSession.id}', ${activeSession.checkIn})">Check-Out Now</button>`;
+    attendanceActionHtml = `<button id="btn-checkout" class="btn" style="background: #ef4444 !important; color: #ffffff !important; border: none; box-shadow: 0 1px 2px rgba(239,68,68,0.2);" onclick="window.handleCheckOut('${activeSession.id}', ${activeSession.checkIn})">${t("studentPortal.checkoutNow", "Check-Out Now")}</button>`;
   } else {
     attendanceActionHtml = isExpired
       ? (pendingPayment
-          ? `<button class="btn btn-secondary" onclick="navigate('student-payments')" style="font-weight:600; display:inline-flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Verification Pending</button>`
-          : `<button class="btn btn-primary" onclick="navigate('student-payments')" style="background:#dc2626 !important; border:none; display:inline-flex; align-items:center; gap:6px; font-weight:700;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Renew to Check-in</button>`)
-      : `<button id="btn-checkin" class="btn" style="background: var(--primary) !important; color: #ffffff !important; border: none;" onclick="window.handleCheckIn()">Check-In Now</button>`;
+          ? `<button class="btn btn-secondary" onclick="navigate('student-payments')" style="font-weight:600; display:inline-flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ${t("studentPortal.verificationPending", "Verification Pending")}</button>`
+          : `<button class="btn btn-primary" onclick="navigate('student-payments')" style="background:#dc2626 !important; border:none; display:inline-flex; align-items:center; gap:6px; font-weight:700;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> ${t("studentPortal.renewToCheckin", "Renew to Check-in")}</button>`)
+      : `<button id="btn-checkin" class="btn" style="background: var(--primary) !important; color: #ffffff !important; border: none;" onclick="window.handleCheckIn()">${t("studentPortal.checkinNow", "Check-In Now")}</button>`;
   }
 
   // 1. DASHBOARD PAGE (Overview)
@@ -1668,7 +1847,15 @@ const renderPortal = () => {
   // wizard screen without changing Firestore. Cleared on every Next/save so
   // the state machine stays the source of truth going forward.
   const manualStep = window.__wizardManualStep || null;
-  const isWizardStep = (k) => k && [STATE.DETAILS, STATE.DOCUMENTS, STATE.PLAN, STATE.SEAT, STATE.PAYMENT].includes(k);
+  const WIZARD_STEP_KEYS = [
+    STATE.DETAILS,
+    STATE.DOCUMENTS,
+    STATE.LIBRARY_TYPE,
+    STATE.PLAN,
+    STATE.SEAT,
+    STATE.PAYMENT
+  ];
+  const isWizardStep = (k) => k && WIZARD_STEP_KEYS.includes(k);
   const effectiveState = (isWizardStep(manualStep) && onboardingState !== STATE.DASHBOARD && onboardingState !== STATE.PENDING && onboardingState !== STATE.REJECTED)
     ? manualStep
     : onboardingState;
@@ -1691,19 +1878,25 @@ const renderPortal = () => {
       if (isWizardStep(target)) {
         // Back/Next explicit jump: render that step immediately (no Firestore
         // round-trip needed for Back). Next/save clears the override first.
-        const order = [STATE.DETAILS, STATE.DOCUMENTS, STATE.PLAN, STATE.SEAT, STATE.PAYMENT];
-        const curIdx = order.indexOf(effectiveState);
-        const tgtIdx = order.indexOf(target);
-        if (tgtIdx !== -1 && tgtIdx < curIdx) {
+        const furthestState = resolvePortalState(s, s._documents || {}, planForRecord(s));
+        const tgtIdx = WIZARD_STEP_KEYS.indexOf(target);
+        const furIdx = WIZARD_STEP_KEYS.indexOf(furthestState);
+
+        // If target is valid and within allowable progress (or going backwards)
+        if (tgtIdx !== -1 && (furIdx === -1 || tgtIdx <= furIdx)) {
           window.__wizardManualStep = target;
           renderPortal();
           return;
         }
-        window.__wizardManualStep = null;
+        window.__wizardManualStep = furthestState;
       } else {
         window.__wizardManualStep = null;
       }
       renderPortal();
+    };
+
+    window.__wizardGoToStep = (target) => {
+      handleWizardAdvance(target);
     };
     renderOnboarding({
       container: portalSection,
@@ -1785,6 +1978,9 @@ const renderPortal = () => {
           <button id="photo-close" style="background: none; border: none; font-size: 1.4rem; cursor: pointer; color: var(--text-muted); line-height:1;">&times;</button>
         </div>
         <div style="padding: 1.5rem; text-align: center;">
+          <div style="padding:8px 12px; background:rgba(59,130,246,0.1); border:1px solid rgba(59,130,246,0.25); border-radius:8px; font-size:12px; color:var(--text-secondary); margin-bottom:1rem; text-align:left; line-height:1.45;">
+            ℹ <strong>Approval Required:</strong> Any profile photo changes require Admin verification before updating your ID card and profile.
+          </div>
           <div id="photo-preview" style="width: 150px; height: 150px; border-radius: 50%; overflow: hidden; border: 3px solid var(--primary); background: var(--bg-hover); margin: 0 auto 1rem; box-shadow: 0 4px 12px rgba(5,150,105,0.2);">
             ${liveAvatar}
           </div>
@@ -1798,7 +1994,7 @@ const renderPortal = () => {
           <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1.25rem;">JPG/PNG up to 10MB. Compressed automatically — square photos look best.</p>
           <div style="display:flex; gap:0.5rem; justify-content:center;">
             <button class="btn btn-ghost" id="photo-cancel">Cancel</button>
-            <button class="btn btn-primary" id="btn-save-photo" style="display:none;">Save Photo</button>
+            <button class="btn btn-primary" id="btn-save-photo" style="display:none;">Submit for Approval</button>
           </div>
         </div>
       `;
@@ -1837,30 +2033,262 @@ const renderPortal = () => {
       saveBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
         saveBtn.disabled = true;
-        saveBtn.innerHTML = 'Uploading...';
+        saveBtn.innerHTML = 'Submitting Request...';
         try {
-          const { uploadProfilePhoto } = await import("./documentUploadService.js");
-          const result = await uploadProfilePhoto(selectedFile, live.id);
-          if (result.success) {
-            // Update in-memory profile so the UI refreshes instantly.
-            if (currentStudent) {
-              currentStudent.profilePhotoUrl = result.url;
-              currentStudent.photoUrl = result.url;
-            }
-            window.showToast("Profile photo updated!", "success");
+          const { compressImage } = await import("./documentUploadService.js");
+          const compressedBase64 = await compressImage(selectedFile);
+          const res = await submitProfileUpdateRequest(live, { photo: compressedBase64 });
+          if (res.success) {
+            window.showToast("Photo change request submitted! Admin will verify and approve.", "success");
             modal.close();
             if (previewUrl) URL.revokeObjectURL(previewUrl);
-            renderPortal();
           } else {
-            window.showToast("Upload failed: " + result.error, "error");
+            window.showToast("Failed to submit photo request: " + res.error, "error");
           }
         } catch (e) {
           window.showToast("Upload failed: " + (e.message || e), "error");
         } finally {
           saveBtn.disabled = false;
-          saveBtn.innerHTML = 'Save Photo';
+          saveBtn.innerHTML = 'Submit for Approval';
         }
       });
+    };
+
+    window.openStudentProfileEditModal = () => {
+      const live = { ...(currentStudent || s || {}) };
+      if (!live.id) live.id = (auth.currentUser ? auth.currentUser.uid : "") || "";
+      const authEmail = auth?.currentUser?.email;
+      const displayEmail = live.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || live.authEmail || "";
+      document.getElementById("student-profile-edit-modal")?.remove();
+      const modal = document.createElement('dialog');
+      modal.id = "student-profile-edit-modal";
+      modal.className = 'card';
+      modal.style.cssText = 'border:none; border-radius:12px; padding:0; box-shadow:0 10px 30px rgba(0,0,0,0.5); background: var(--bg-card); color: var(--text-primary); max-width: 500px; width: calc(100vw - 32px); margin: auto; max-height:90vh; overflow-y:auto;';
+      modal.innerHTML = `
+        <div style="padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position:sticky; top:0; background:var(--bg-card); z-index:2;">
+          <div>
+            <h2 style="font-size: 1.1rem; font-weight: 700; margin: 0;">Edit Student Details</h2>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top:2px;">Student ID: ${live.studentId || live.admissionNo || "—"}</div>
+          </div>
+          <button id="sp-edit-close" style="background: none; border: none; font-size: 1.4rem; cursor: pointer; color: var(--text-muted); line-height:1;">&times;</button>
+        </div>
+        <div style="padding: 1.25rem 1.5rem;">
+          <div style="padding:10px 14px; background:rgba(59,130,246,0.1); border:1px solid rgba(59,130,246,0.25); border-radius:8px; font-size:12px; color:var(--text-secondary); margin-bottom:1.25rem; line-height:1.45;">
+            ℹ <strong>Approval Required:</strong> Any changes to your Student ID details require Admin review and approval before they take effect.
+          </div>
+          <form id="sp-profile-edit-form" class="form-grid" style="gap:1rem;">
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">Full Name</label>
+              <input type="text" id="sp-edit-name" value="${(live.name || "").replace(/"/g, '&quot;')}" required class="sp-input" />
+            </div>
+            <div class="form-group">
+              <label style="font-size:12px; font-weight:600;">Phone Number</label>
+              <input type="tel" id="sp-edit-phone" pattern="[0-9]{10}" title="10-digit phone" value="${(live.phone || "").replace(/"/g, '&quot;')}" required class="sp-input" />
+            </div>
+            <div class="form-group">
+              <label style="font-size:12px; font-weight:600;">Email Address</label>
+              <input type="email" id="sp-edit-email" value="${(displayEmail || "").replace(/"/g, '&quot;')}" class="sp-input" />
+            </div>
+            <div class="form-group">
+              <label style="font-size:12px; font-weight:600;">College / Institution <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(optional)</span></label>
+              <input type="text" id="sp-edit-college" value="${(live.college || "").replace(/"/g, '&quot;')}" class="sp-input" />
+            </div>
+            <div class="form-group">
+              <label style="font-size:12px; font-weight:600;">Course / Degree <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(optional)</span></label>
+              <input type="text" id="sp-edit-course" value="${(live.course || "").replace(/"/g, '&quot;')}" class="sp-input" />
+            </div>
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">Parent / Guardian Phone <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">(optional)</span></label>
+              <input type="tel" id="sp-edit-parent-phone" value="${(live.parentPhone || "").replace(/"/g, '&quot;')}" class="sp-input" placeholder="10-digit number" />
+            </div>
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">Residential Address</label>
+              <textarea id="sp-edit-address" rows="2" class="sp-input" style="width:100%; resize:vertical;">${live.address || ""}</textarea>
+            </div>
+            <div style="margin-top:1rem; padding-top:1rem; border-top:1px dashed var(--border); display:flex; justify-content:space-between; align-items:center; width:100%;">
+              <div>
+                <div style="font-size:12.5px; font-weight:600; color:var(--text-primary);">Account Password</div>
+                <div style="font-size:11px; color:var(--text-muted);">Update your portal login password</div>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window.openChangePasswordModal()" style="font-size:12px; border:1px solid var(--border);">Change Password</button>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.75rem; width:100%;">
+              <button type="button" class="btn btn-ghost" id="sp-edit-cancel">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="sp-edit-submit">Submit for Approval</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.showModal();
+      modal.querySelector("#sp-edit-close").onclick = () => modal.close();
+      modal.querySelector("#sp-edit-cancel").onclick = () => modal.close();
+      modal.addEventListener("close", () => modal.remove());
+
+      const form = modal.querySelector("#sp-profile-edit-form");
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = modal.querySelector("#sp-edit-submit");
+        btn.disabled = true;
+        btn.textContent = "Submitting...";
+
+        const requested = {
+          name: modal.querySelector("#sp-edit-name").value.trim(),
+          phone: modal.querySelector("#sp-edit-phone").value.trim(),
+          email: modal.querySelector("#sp-edit-email").value.trim().toLowerCase(),
+          college: modal.querySelector("#sp-edit-college").value.trim(),
+          course: modal.querySelector("#sp-edit-course").value.trim(),
+          parentPhone: modal.querySelector("#sp-edit-parent-phone").value.trim(),
+          address: modal.querySelector("#sp-edit-address").value.trim()
+        };
+
+        let hasChanges = false;
+        for (const k of Object.keys(requested)) {
+          if ((requested[k] || "") !== (live[k] || "")) {
+            hasChanges = true;
+            break;
+          }
+        }
+        if (!hasChanges) {
+          window.showToast("No changes detected in your details.", "info");
+          btn.disabled = false;
+          btn.textContent = "Submit for Approval";
+          return;
+        }
+
+        try {
+          const res = await submitProfileUpdateRequest(live, requested);
+          if (res.success) {
+            window.showToast("Profile change request submitted! Admin will verify and approve.", "success");
+            modal.close();
+          } else {
+            window.showToast("Failed to submit request: " + res.error, "error");
+          }
+        } catch (err) {
+          window.showToast("Error: " + err.message, "error");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Submit for Approval";
+        }
+      };
+    };
+
+    window.openChangePasswordModal = () => {
+      document.getElementById("student-password-modal")?.remove();
+      const modal = document.createElement('dialog');
+      modal.id = "student-password-modal";
+      modal.className = 'card';
+      modal.style.cssText = 'border:none; border-radius:14px; padding:0; box-shadow:0 15px 40px rgba(0,0,0,0.45); background: var(--bg-card); color: var(--text-primary); max-width: 440px; width: calc(100vw - 32px); margin: auto;';
+      modal.innerHTML = `
+        <div style="padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="width:32px; height:32px; border-radius:8px; background:rgba(59,130,246,0.12); color:#3b82f6; display:flex; align-items:center; justify-content:center;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div>
+              <h3 style="font-size: 1.05rem; font-weight: 700; margin: 0;">Change Password</h3>
+              <div style="font-size: 11.5px; color: var(--text-muted); margin-top:2px;">Update your student portal login credentials</div>
+            </div>
+          </div>
+          <button id="sp-pwd-close" style="background: none; border: none; font-size: 1.4rem; cursor: pointer; color: var(--text-muted); line-height:1;">&times;</button>
+        </div>
+        <div style="padding: 1.25rem 1.5rem;">
+          <form id="sp-password-form" class="form-grid" style="gap:1rem;">
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">Current Password *</label>
+              <div style="position:relative;">
+                <input type="password" id="sp-pwd-curr" required class="sp-input" placeholder="Enter current password" style="padding-right:40px; width:100%; box-sizing:border-box;" autocomplete="current-password" />
+                <button type="button" onclick="window.togglePwdVisibility('sp-pwd-curr', this)" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">New Password *</label>
+              <div style="position:relative;">
+                <input type="password" id="sp-pwd-new" required minlength="6" class="sp-input" placeholder="At least 6 characters" style="padding-right:40px; width:100%; box-sizing:border-box;" autocomplete="new-password" />
+                <button type="button" onclick="window.togglePwdVisibility('sp-pwd-new', this)" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="form-group full-width">
+              <label style="font-size:12px; font-weight:600;">Confirm New Password *</label>
+              <div style="position:relative;">
+                <input type="password" id="sp-pwd-conf" required minlength="6" class="sp-input" placeholder="Re-type new password" style="padding-right:40px; width:100%; box-sizing:border-box;" autocomplete="new-password" />
+                <button type="button" onclick="window.togglePwdVisibility('sp-pwd-conf', this)" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+            <div id="sp-pwd-err" style="color:var(--danger, #f43f5e); font-size:12px; display:none; padding:6px 10px; background:rgba(239,68,68,0.1); border-radius:6px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.5rem; width:100%;">
+              <button type="button" class="btn btn-ghost" id="sp-pwd-cancel">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="sp-pwd-submit">Update Password</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.showModal();
+      modal.querySelector("#sp-pwd-close").onclick = () => modal.close();
+      modal.querySelector("#sp-pwd-cancel").onclick = () => modal.close();
+      modal.addEventListener("close", () => modal.remove());
+
+      const form = modal.querySelector("#sp-password-form");
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const errEl = modal.querySelector("#sp-pwd-err");
+        errEl.style.display = "none";
+
+        const curr = modal.querySelector("#sp-pwd-curr").value;
+        const newP = modal.querySelector("#sp-pwd-new").value;
+        const conf = modal.querySelector("#sp-pwd-conf").value;
+
+        if (newP.length < 6) {
+          errEl.textContent = "New password must be at least 6 characters long.";
+          errEl.style.display = "block";
+          return;
+        }
+        if (newP !== conf) {
+          errEl.textContent = "New passwords do not match. Please re-type.";
+          errEl.style.display = "block";
+          return;
+        }
+
+        const btn = modal.querySelector("#sp-pwd-submit");
+        btn.disabled = true;
+        btn.textContent = "Updating...";
+
+        try {
+          const res = await changeUserPassword(curr, newP);
+          if (res.success) {
+            window.showToast("Password updated successfully! Use your new password on next login.", "success");
+            modal.close();
+          } else {
+            errEl.textContent = res.error || "Failed to update password.";
+            errEl.style.display = "block";
+          }
+        } catch (err) {
+          errEl.textContent = err.message || "Failed to update password.";
+          errEl.style.display = "block";
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Update Password";
+        }
+      };
+    };
+
+    window.togglePwdVisibility = (inputId, btn) => {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      if (input.type === "password") {
+        input.type = "text";
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+      } else {
+        input.type = "password";
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+      }
     };
 
     // Get student photo from Firestore documents
@@ -1898,8 +2326,8 @@ const renderPortal = () => {
     portalSection.innerHTML = `
       <div class="page-header">
         <div>
-          <h1>${window.t ? window.t("studentPortal.welcome", { name: s.name }) : "Welcome back, " + s.name}</h1>
-          <p class="page-subtitle">Here is your personal study portal.</p>
+          <h1>${t("studentPortal.welcome", "Welcome back")}${s.name ? `, ${s.name}` : ""}</h1>
+          <p class="page-subtitle">${t("studentPortal.hereIsPersonalPortal", "Here is your personal study portal.")}</p>
         </div>
         <div style="display:flex; gap:1rem; align-items:center;">
           ${attendanceActionHtml}
@@ -1908,41 +2336,67 @@ const renderPortal = () => {
 
       <!-- Live overview: profile / check-in state / study hours / subscription -->
       <div class="metrics-grid">
-        <div class="metric-card" style="align-items: center; text-align: center;">
-          <div style="width: 80px; height: 80px; border-radius: 50%; overflow: hidden; border: 3px solid var(--primary); background: var(--bg-card); margin-bottom: 0.75rem; box-shadow: 0 4px 12px rgba(5,150,105,0.2); flex-shrink:0;">
-            ${avatarHtml}
+        <div class="metric-card" style="display:flex; flex-direction:column; justify-content:space-between; align-items:center; text-align:center;">
+          <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+            <div style="width: 80px; height: 80px; border-radius: 50%; overflow: hidden; border: 3px solid ${s.libraryType === 'Shreeji Premium Reading Library' ? '#d97706' : 'var(--primary)'}; background: var(--bg-card); margin-bottom: 0.75rem; box-shadow: 0 4px 12px ${s.libraryType === 'Shreeji Premium Reading Library' ? 'rgba(217,119,6,0.25)' : 'rgba(5,150,105,0.2)'}; flex-shrink:0;">
+              ${avatarHtml}
+            </div>
+            <div style="width: 100%;">
+              <div style="font-weight:700; font-size:1.05rem; color:var(--text-primary); display:flex; align-items:center; justify-content:center; gap:6px;">
+                ${s.name || "Student"}
+                ${s.libraryType === 'Shreeji Premium Reading Library' ? `<span style="font-size:9.5px; font-weight:800; padding:2px 7px; border-radius:999px; background:linear-gradient(135deg, #f59e0b, #d97706); color:#fff; letter-spacing:0.04em;">PREMIUM</span>` : ''}
+              </div>
+              <div style="font-size:0.8rem; color:var(--text-muted); margin:2px 0 6px;">
+                ${s.libraryType === 'Shreeji Premium Reading Library' ? '<strong style="color:#d97706;">Shreeji Premium Library (1st Floor)</strong>' : 'Shreeji Reading Library (Ground Floor)'} · ${s.planName || "No plan"} · Seat ${seatLabel} · ${s.status || "—"}
+              </div>
+            </div>
           </div>
-          <div style="width: 100%;">
-            <div style="font-weight:700; font-size:1rem; color:var(--text-primary);">${s.name || "Student"}</div>
-            <div style="font-size:0.8rem; color:var(--text-muted); margin:2px 0 6px;">${s.planName || "No plan"} · Seat ${seatLabel} · ${s.status || "—"}</div>
+          <div style="display:flex; justify-content:center; gap:5px; flex-wrap:wrap; margin-top:auto; padding-top:0.75rem; width:100%;">
             ${s.profilePhotoUrl || s.photoUrl || s.photo
-              ? `<button class="btn btn-ghost btn-sm" onclick="window.updateProfilePhoto()" style="margin-top: 0.25rem; font-size: 0.75rem;">Change Photo</button>`
-              : `<button class="btn btn-primary btn-sm" onclick="window.updateProfilePhoto()" style="margin-top: 0.25rem; font-size: 0.75rem;">Add Photo</button>`}
+              ? `<button class="btn btn-ghost btn-sm" onclick="window.updateProfilePhoto()" style="font-size: 0.72rem; padding:4px 8px;">${t("studentPortal.changePhoto", "Change Photo")}</button>`
+              : `<button class="btn btn-primary btn-sm" onclick="window.updateProfilePhoto()" style="font-size: 0.72rem; padding:4px 8px;">${t("studentPortal.addPhoto", "Add Photo")}</button>`}
+            <button class="btn btn-secondary btn-sm" onclick="window.openStudentProfileEditModal()" style="font-size: 0.72rem; padding:4px 8px;">${t("studentPortal.editDetails", "Edit Details")}</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.openChangePasswordModal()" style="font-size: 0.72rem; padding:4px 8px; display:inline-flex; align-items:center; gap:3px;" title="Change Password">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Password
+            </button>
           </div>
         </div>
-        <div class="metric-card" style="align-items: center;">
-          <div class="metric-icon ${isExpired ? "red" : (activeSession ? "emerald" : "amber")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
-          <div>
-            <div class="metric-label">Right now</div>
-            <div class="metric-value" style="font-size:1.15rem; color:${isExpired ? "var(--danger)" : "inherit"};">${isExpired ? "Access Locked" : (activeSession ? "Checked in" : "Not checked in")}</div>
+
+        <div class="metric-card" style="display:flex; flex-direction:column; justify-content:space-between; align-items:center; text-align:center;">
+          <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+            <div class="metric-icon ${isExpired ? "red" : (activeSession ? "emerald" : "amber")}" style="margin-bottom:0.5rem;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+            <div class="metric-label">${t("studentPortal.rightNow", "Right now")}</div>
+            <div class="metric-value" style="font-size:1.15rem; color:${isExpired ? "var(--danger)" : "inherit"};">${isExpired ? t("studentPortal.accessLocked", "Access Locked") : (activeSession ? t("studentPortal.checkedIn", "Checked in") : t("studentPortal.notCheckedIn", "Not checked in"))}</div>
             <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${isExpired ? "Subscription expired. Renew to check in." : (activeSession ? `Seat ${seatLabel} · since ${checkinSince}` : (s.seatNumber ? `Your seat: Seat ${s.seatNumber} (${s.seatFloor || 'Ground Floor'})` : "Pick any free seat at check-in"))}</div>
-            ${(!isExpired && canChangeSeat) ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="margin-top:6px; font-size:0.75rem;">Change seat</button>` : ""}
+          </div>
+          <div style="margin-top:auto; padding-top:0.75rem; width:100%; display:flex; justify-content:center;">
+            ${(!isExpired && canChangeSeat) ? `<button class="btn btn-ghost btn-sm" onclick="window.openSeatChangeModal()" style="font-size:0.75rem; width:100%;">${t("studentPortal.changeSeat", "Change seat")}</button>` : `<span class="badge ${activeSession ? 'badge-paid' : 'badge-pending'}" style="font-size:11px; padding:4px 10px;">${activeSession ? 'Active Session' : 'Ready for Check-In'}</span>`}
           </div>
         </div>
-        <div class="metric-card" style="align-items: center;">
-          <div class="metric-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></div>
-          <div>
-            <div class="metric-label">Study hours</div>
-            <div class="metric-value" style="font-size:1.15rem;">${liveToday}h <span style="font-size:0.75rem; font-weight:500; color:var(--text-muted);">today</span></div>
+
+        <div class="metric-card" style="display:flex; flex-direction:column; justify-content:space-between; align-items:center; text-align:center;">
+          <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+            <div class="metric-icon blue" style="margin-bottom:0.5rem;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></div>
+            <div class="metric-label">${t("studentPortal.studyHours", "Study hours")}</div>
+            <div class="metric-value" style="font-size:1.15rem;">${liveToday}h <span style="font-size:0.75rem; font-weight:500; color:var(--text-muted);">${t("studentPortal.today", "today")}</span></div>
             <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${studyHours.monthlyHours || 0}h this month · ${studyHours.totalHours || 0}h total</div>
           </div>
+          <div style="margin-top:auto; padding-top:0.75rem; width:100%; display:flex; justify-content:center;">
+            <button class="btn btn-ghost btn-sm" onclick="navigate('student-attendance')" style="font-size:0.75rem; width:100%;">${t("studentPortal.viewAttendance", "View Attendance")}</button>
+          </div>
         </div>
-        <div class="metric-card" style="align-items: center;">
-          <div class="metric-icon ${isExpired || dueUrgent ? "red" : "teal"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg></div>
-          <div>
-            <div class="metric-label">Subscription</div>
-            <div class="metric-value" style="font-size:1.15rem; color:${isExpired || dueUrgent ? "var(--danger)" : "inherit"};">${isExpired ? "Expired" : subscriptionLeft}</div>
+
+        <div class="metric-card" style="display:flex; flex-direction:column; justify-content:space-between; align-items:center; text-align:center;">
+          <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+            <div class="metric-icon ${isExpired || dueUrgent ? "red" : "teal"}" style="margin-bottom:0.5rem;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg></div>
+            <div class="metric-label">${t("studentPortal.subscription", "Subscription")}</div>
+            <div class="metric-value" style="font-size:1.15rem; color:${isExpired || dueUrgent ? "var(--danger)" : "inherit"};">${isExpired ? t("studentPortal.expired", "Expired") : subscriptionLeft}</div>
             <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${isExpired ? `Ended ${dueLabel} · Access locked` : `Due ${dueLabel} · ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}${pendingPayments.length ? ` · ${pendingPayments.length} pending` : " · all clear"}`}</div>
+          </div>
+          <div style="margin-top:auto; padding-top:0.75rem; width:100%; display:flex; justify-content:center;">
+            <button class="btn ${isExpired || dueUrgent ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="navigate('student-payments')" style="font-size:0.75rem; width:100%; justify-content:center; ${isExpired || dueUrgent ? 'background:var(--danger); border-color:var(--danger); color:#fff;' : ''}">
+              ${isExpired ? 'Pay Debt & Renew' : (dueUrgent ? 'Renew Now' : 'Payment History')}
+            </button>
           </div>
         </div>
       </div>
@@ -1984,18 +2438,18 @@ const renderPortal = () => {
       
       <div class="dashboard-grid" style="margin-top: 1.25rem;">
         <div class="card">
-          <div class="card-header"><h3>Recent check-ins</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-attendance')">View all</button></div>
+          <div class="card-header"><h3>${t("studentPortal.recentCheckins", "Recent check-ins")}</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-attendance')">${t("studentPortal.viewAll", "View all")}</button></div>
           ${currentAttendance.length === 0
             ? `<div style="text-align:center; color:var(--text-muted); padding:1.5rem 0;">No check-ins yet — use Check-In Now when you arrive.</div>`
             : `<div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Seat</th><th>In</th><th>Out</th><th>Status</th></tr></thead><tbody>${currentAttendance.slice(0, 5).map(r => {
                 const cIn = r.checkIn ? new Date(r.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
                 const cOut = r.checkOut ? new Date(r.checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : (r.status === "Active" ? "In now" : "—");
-                const badge = r.status === "Active" ? `<span class="badge badge-pending">Active</span>` : `<span class="badge badge-paid">Done</span>`;
+                const badge = r.status === "Active" ? `<span class="badge badge-pending">${t("studentPortal.active", "Active")}</span>` : `<span class="badge badge-paid">Done</span>`;
                 return `<tr><td>${r.date || "—"}</td><td>${r.seatNumber || "—"}</td><td>${cIn}</td><td>${cOut}</td><td>${badge}</td></tr>`;
               }).join("")}</tbody></table></div>`}
         </div>
         <div class="card">
-          <div class="card-header"><h3>Payments</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-payments')">Pay / history</button></div>
+          <div class="card-header"><h3>${t("studentPortal.payments", "Payments")}</h3><button class="btn btn-ghost btn-sm" onclick="navigate('student-payments')">${t("studentPortal.payHistory", "Pay / history")}</button></div>
           ${lastPayment
             ? `<div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:0.75rem;">Last: <strong style="color:var(--text-primary);">₹${Number(lastPayment.amount) || 0}</strong> · ${lastPayment.status || "pending"} · ${lastPayment.date ? new Date(lastPayment.date).toLocaleDateString() : "—"}</div>`
             : `<div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">No payments yet.</div>`}
@@ -2296,11 +2750,13 @@ const renderPortal = () => {
                   </div>
                 </div>
 
-                <div class="form-group full-width sp-actions">
-                  <button type="button" class="btn btn-ghost" title="Clear the transaction ID field" onclick="document.getElementById('payment-txnid').value=''">Clear</button>
-                  <button type="submit" id="btn-submit-payment" class="btn btn-primary sp-pay-submit" style="background:#16a34a; border-color:#16a34a;">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <div class="form-group full-width" style="margin-top:1.25rem; display:flex; flex-direction:column; gap:0.6rem; width:100%;">
+                  <button type="submit" id="btn-submit-payment" class="btn btn-primary sp-pay-submit" style="width:100%; min-height:46px; font-size:15px; font-weight:700; background:#16a34a; border-color:#16a34a; color:#fff; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border-radius:8px;">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
                     Submit Renewal Request
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-sm" style="width:100%; font-size:12.5px; color:var(--text-muted); justify-content:center; padding:6px;" onclick="document.getElementById('payment-txnid').value=''; const ss = document.getElementById('payment-ss'); if (ss) ss.value='';">
+                    Clear Form
                   </button>
                 </div>
               </form>
@@ -2312,7 +2768,15 @@ const renderPortal = () => {
               <div id="sp-qr-upi-view" style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; width:100%;">
                 <h4 style="margin:0; font-size: 0.9rem; color:var(--text-secondary); text-align:center;">Scan to Pay</h4>
                 <div style="width: 160px; height: 160px; background:var(--bg-card); border:1px solid var(--border); border-radius: 8px; display:flex; align-items:center; justify-content:center; overflow: hidden; padding:4px;">
-                  <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 100%; height: 100%; object-fit: contain;" />
+                  <img src="" class="payment-qr-img" alt="Scan to Pay" style="width: 100%; height: 100%; object-fit: contain; cursor:pointer;" onclick="window.enlargeDocument(this.src, 'Payment QR Code')" title="Click to view enlarged QR" />
+                </div>
+                <div style="display:flex; gap:0.5rem; width:100%; justify-content:center; flex-wrap:wrap; margin-top:2px;">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.downloadPaymentQr()" style="font-size:12px; padding:5px 10px; display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border); border-radius:6px; cursor:pointer;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download QR
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.copyLibraryUpi()" style="font-size:12px; padding:5px 10px; display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border); border-radius:6px; cursor:pointer;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy UPI ID
+                  </button>
                 </div>
                 <p style="font-size: 0.75rem; color:var(--text-secondary); text-align: center; margin: 0; line-height: 1.4;">Pay using GPay, PhonePe, or Paytm and enter the Txn ID here.</p>
               </div>
@@ -2347,8 +2811,10 @@ const renderPortal = () => {
                   <th>Plan</th>
                   <th>Period</th>
                   <th>Amount</th>
+                  <th>Mode</th>
                   <th>Txn ID</th>
                   <th>Status</th>
+                  <th>E-Invoice</th>
                   <th style="text-align:center;">Proof</th>
                 </tr>
               </thead>
@@ -2403,41 +2869,48 @@ const renderPortal = () => {
   document.getElementById("page-student-complaints").innerHTML = `
     <div class="page-header">
       <div>
-        <h1>Complaints</h1>
-        <p class="page-subtitle">Report issues and track their resolution status.</p>
+        <h1>Complaints & Support</h1>
+        <p class="page-subtitle">Report issues and track desk responses in real-time.</p>
       </div>
     </div>
     
-    <div class="sp-stack">
-      <div class="sp-stack" style="margin-top:0;">
-        <div class="card" style="border-left: 4px solid var(--danger); max-width: 640px; width: 100%; box-sizing: border-box;">
-          <h3 style="margin-bottom: 1.5rem;">Report an Issue</h3>
-          <form onsubmit="event.preventDefault(); window.handleComplaintSubmit();" class="form-grid">
-            <div class="form-group full-width">
-              <label>Category</label>
-              <select id="complaint-category" class="sp-input" required>
-                <option value="">Select an issue...</option>
-                <option value="Noise">Noise</option>
-                <option value="Light">Light</option>
-                <option value="Fan">Fan</option>
-                <option value="Charging Point">Charging Point</option>
-                <option value="Furniture">Furniture</option>
-                <option value="Cleaning">Cleaning</option>
-                <option value="Washroom">Washroom</option>
-                <option value="WiFi">WiFi</option>
-                <option value="Others">Others</option>
-              </select>
-            </div>
-            <div class="form-group full-width">
-              <label>Description</label>
-              <textarea id="complaint-description" rows="3" style="resize:none;" required placeholder="Describe the issue in detail..."></textarea>
-            </div>
-            <div class="form-group full-width" style="margin-top: 0.5rem;">
-              <button type="submit" id="btn-submit-complaint" class="btn btn-primary">Submit Complaint</button>
-            </div>
-          </form>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1.25rem; align-items:start;">
+      <div class="card" style="border-left: 4px solid var(--danger);">
+        <h3 style="margin-bottom: 1.25rem;">Report an Issue</h3>
+        <form onsubmit="event.preventDefault(); window.handleComplaintSubmit();" class="form-grid">
+          <div class="form-group full-width">
+            <label>Category *</label>
+            <select id="complaint-category" class="sp-input" required>
+              <option value="">Select an issue...</option>
+              <option value="Noise">Noise</option>
+              <option value="Light">Light</option>
+              <option value="Fan">Fan</option>
+              <option value="Charging Point">Charging Point</option>
+              <option value="Furniture">Furniture</option>
+              <option value="Cleaning">Cleaning</option>
+              <option value="Washroom">Washroom</option>
+              <option value="WiFi">WiFi</option>
+              <option value="Others">Others</option>
+            </select>
+          </div>
+          <div class="form-group full-width">
+            <label>Description *</label>
+            <textarea id="complaint-description" rows="4" style="resize:vertical;" required placeholder="Describe the issue in detail..."></textarea>
+          </div>
+          <div class="form-group full-width" style="margin-top: 0.5rem;">
+            <button type="submit" id="btn-submit-complaint" class="btn btn-primary" style="width:100%; justify-content:center;">Submit Complaint</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
+          <h3 style="margin:0;">My Complaints</h3>
+          <span style="font-size:12px; color:var(--text-muted);">${currentComplaints.length} reported</span>
         </div>
-        <div class="card"><h3 style="margin-bottom: 1rem;">My Complaints</h3><div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Category</th><th>Details</th><th>Status</th></tr></thead><tbody>${complaintsHtml}</tbody></table></div></div>
+        <div id="sp-complaints-list">
+          ${complaintsHtml}
+        </div>
       </div>
     </div>
   `;

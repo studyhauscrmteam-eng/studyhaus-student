@@ -1,6 +1,8 @@
 import { collection, addDoc, updateDoc, doc, query, where, onSnapshot, serverTimestamp, getDocs, getDoc, orderBy, writeBatch } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 
+import { validateStudentScheduleAccess } from "./scheduleService.js";
+
 // Helper to get today's date string YYYY-MM-DD
 const getTodayStr = () => {
   const d = new Date();
@@ -18,28 +20,36 @@ const permissionHint = () => "Permission denied. Please deploy the latest firest
  * Validates Check-In rules:
  * 1. Checks if Membership is Active.
  * 2. Checks if Seat exists (has truthy value).
- * 3. Checks Night Study constraint.
+ * 3. Checks Day/Night access schedule using configurable 24/7 library rules.
  * 4. Checks if there is already an Active session today.
  */
-const validateCheckIn = async (student, selectedSeatNumber) => {
+const validateCheckIn = async (student, selectedSeatNumber, selectedSeatFloor = null) => {
   if (!student || !student.id) throw new Error("Student profile not loaded yet. Please wait and try again.");
+  if (student.portalAccessDisabled === true || student.status === "Old" || student.status === "Old Student") {
+    throw new Error("Portal access is disabled for Old Students. Please contact library administration.");
+  }
   if (student.status !== "Active") throw new Error("Membership is not active. Please clear dues or contact the desk.");
 
   // Seat-first check-in: the seat the student CHOSE wins for every plan.
   // Falls back to the assigned seat only when nothing was selected (desk flow).
-  const chosenSeat = selectedSeatNumber ? String(selectedSeatNumber).trim() : "";
-  const assignedSeat = student.seatNumber ? String(student.seatNumber).trim() : "";
+  // Plain numbers only ("A20" -> "20"); floor hint carried for disambiguation.
+  const stripPlain = (v) => {
+    const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+    const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+    return m ? String(Number(m[1])) : String(v == null ? "" : v).trim();
+  };
+  const chosenSeat = selectedSeatNumber ? stripPlain(selectedSeatNumber) : "";
+  const assignedSeat = student.seatNumber ? stripPlain(student.seatNumber) : "";
   const finalSeat = chosenSeat || assignedSeat;
+  // Floor hint: explicit arg wins, else the student's stored floor.
+  const seatFloorHint = selectedSeatFloor || (student && (student.seatFloor || "")) || "Ground Floor";
 
   if (!finalSeat) throw new Error("Select a seat to check in.");
 
-  // Night Study check (7 PM to 7 AM)
-  const isNightPlan = (student.planName || "").toLowerCase().includes("night");
-  if (isNightPlan) {
-    const hour = new Date().getHours();
-    if (hour >= 7 && hour < 19) {
-      throw new Error("Night study students can only check in between 7:00 PM and 7:00 AM.");
-    }
+  // Configurable 24/7 Day & Night schedule validation (Requirement 7)
+  const schedCheck = await validateStudentScheduleAccess(student, seatFloorHint);
+  if (!schedCheck.allowed) {
+    throw new Error(schedCheck.reason || "Check-in outside permitted schedule hours.");
   }
 
   const today = getTodayStr();
@@ -92,7 +102,10 @@ const validateCheckIn = async (student, selectedSeatNumber) => {
             const seatQ = query(collection(db, "seats"), where("seatNumber", "==", sessionData.seatNumber));
             const seatSnap = await getDocs(seatQ);
             if (!seatSnap.empty) {
-              const seatDoc = seatSnap.docs[0];
+              const fh = sessionData.seatFloor || "";
+              const seatDoc = seatSnap.docs.length === 1
+                ? seatSnap.docs[0]
+                : (fh && seatSnap.docs.find(d => ((d.data() || {}).floor || "") === fh)) || seatSnap.docs[0];
               const sData = seatDoc.data();
               const newStatus = sData.assignedStudentId ? "Reserved" : "Available";
               await updateDoc(seatDoc.ref, { status: newStatus, lastUpdated: serverTimestamp() });
@@ -109,51 +122,125 @@ const validateCheckIn = async (student, selectedSeatNumber) => {
 export const checkIn = async (student, selectedSeatNumber = null, selectedSeatFloor = null) => {
   let finalSeat = null;
   try {
-    finalSeat = await validateCheckIn(student, selectedSeatNumber);
+    finalSeat = await validateCheckIn(student, selectedSeatNumber, selectedSeatFloor);
   } catch (error) {
     return { success: false, error: error.message };
   }
 
   try {
+    const stripPlain = (v) => {
+      const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+      const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+      if (m) return String(Number(m[1]));
+      const m2 = raw.match(/^([A-Z]+)-?0*(\d+)$/);
+      if (m2) return String(Number(m2[2]));
+      return raw;
+    };
+
     const rawSel = String(selectedSeatNumber || "").trim().toUpperCase();
-    const floorHint = selectedSeatFloor || (rawSel.startsWith("B") || rawSel.endsWith("B")
+    const isFirstByPrefix = rawSel.startsWith("P") || rawSel.startsWith("B") || rawSel.endsWith("B");
+    const isGroundByPrefix = rawSel.startsWith("L") || rawSel.startsWith("A") || rawSel.endsWith("A");
+    const floorHint = selectedSeatFloor || (isFirstByPrefix
       ? "First Floor"
-      : (rawSel.startsWith("A") || rawSel.endsWith("A")
+      : (isGroundByPrefix
           ? "Ground Floor"
           : ((student && student.seatFloor) || "Ground Floor")));
 
-    // Verify seat is available (or reserved — first come, first served)
-    let seatSnap;
+    const plainNum = stripPlain(finalSeat);
+    const resolvedFloor = floorHint.toLowerCase().includes("first") ? "First Floor" : "Ground Floor";
+
+    // Resolve seat document strictly on the target floor
+    const docId = resolvedFloor === "First Floor" ? `first-${plainNum}` : `ground-${plainNum}`;
+    let seatDoc = null;
     try {
-      const seatQ = query(collection(db, "seats"), where("seatNumber", "==", finalSeat));
-      seatSnap = await getDocs(seatQ);
-    } catch (e) {
-      if (isPermissionError(e)) return { success: false, error: permissionHint() };
-      throw e;
+      const directSnap = await getDoc(doc(db, "seats", docId));
+      if (directSnap.exists()) seatDoc = directSnap;
+    } catch (_) {}
+
+    if (!seatDoc) {
+      const seatQ = query(collection(db, "seats"), where("floor", "==", resolvedFloor));
+      const seatSnap = await getDocs(seatQ);
+      seatDoc = seatSnap.docs.find(d => {
+        const sn = d.data().seatNumber;
+        return sn === finalSeat || stripPlain(sn) === plainNum;
+      }) || null;
     }
-    if (seatSnap.empty) return { success: false, error: `Seat ${finalSeat} (${floorHint}) not found. Please pick another seat.` };
 
-    const isFirst = floorHint.toLowerCase().includes("first") || floorHint.startsWith("B");
-    const seatDoc = (seatSnap.docs.length > 1
-      ? (seatSnap.docs.find(d => {
-          const df = String((d.data() || {}).floor || "").toLowerCase();
-          return isFirst ? (df.includes("first") || d.id.startsWith("b")) : (df.includes("ground") || d.id.startsWith("a"));
-        }) || seatSnap.docs[0])
-      : seatSnap.docs[0]);
+    if (!seatDoc) {
+      const seatQ = query(collection(db, "seats"), where("seatNumber", "==", finalSeat));
+      const seatSnap = await getDocs(seatQ);
+      if (!seatSnap.empty) {
+        seatDoc = seatSnap.docs.find(d => (d.data().floor || "Ground Floor") === resolvedFloor) || seatSnap.docs[0];
+      }
+    }
+
+    if (!seatDoc) return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) not found. Please pick another seat.` };
+
     const seatData = seatDoc.data() || {};
-    const resolvedFloor = seatData.floor || floorHint || (student && student.seatFloor) || "Ground Floor";
+    if (seatData.status === "Maintenance" || seatData.status === "Inactive") {
+      return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is under maintenance. Please pick another seat.` };
+    }
 
-    if (seatData.status === "Occupied") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is already occupied. Please pick another seat.` };
-    if (seatData.status === "Pending") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) has a pending seat-change request. Please pick another seat.` };
-    if (seatData.status === "Maintenance" || seatData.status === "Inactive") return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is under maintenance. Please pick another seat.` };
-    // Reserved seats are freely pickable — first come, first served. The
-    // assignment only decides which status the seat reverts to on check-out.
+    const isFixedOwner = (seatData.assignedStudentId && seatData.assignedStudentId === student.id);
+
+    // FIXED-SEAT ARRIVAL CONFLICT RESOLUTION (Requirement 5)
+    if (isFixedOwner && seatData.currentOccupantId && seatData.currentOccupantId !== student.id) {
+      // Fixed owner arrived while a rotational guest is occupying the chair!
+      try {
+        await updateDoc(seatDoc.ref, {
+          status: "Conflict",
+          conflict: {
+            type: "fixed_owner_arrival",
+            fixedStudentId: student.id,
+            fixedStudentName: student.name,
+            rotationalStudentId: seatData.currentOccupantId,
+            rotationalStudentName: seatData.currentOccupantName || "Rotational Guest",
+            sessionId: seatData.currentSessionId || null,
+            reportedAt: Date.now()
+          },
+          lastUpdated: serverTimestamp()
+        });
+      } catch (_) {}
+
+      // Notify staff
+      try {
+        await addDoc(collection(db, "notifications"), {
+          type: "seat_conflict",
+          title: "Fixed Owner Arrived",
+          message: `${student.name} arrived for assigned Seat ${finalSeat} (${resolvedFloor}), currently occupied by ${seatData.currentOccupantName || 'a rotational guest'}. Reassignment needed.`,
+          seatId: seatDoc.id,
+          seatNumber: finalSeat,
+          floor: resolvedFloor,
+          createdAt: serverTimestamp(),
+          unread: true
+        });
+      } catch (_) {}
+
+      return {
+        success: false,
+        conflict: true,
+        error: `Seat ${finalSeat} (${resolvedFloor}) is currently occupied by a rotational guest (${seatData.currentOccupantName || 'Student'}). Staff has been notified to reassign them for you.`
+      };
+    }
+
+    // Rotational student arriving: check if seat is physically occupied
+    if (!isFixedOwner && seatData.currentOccupantId && seatData.currentOccupantId !== student.id) {
+      return { success: false, error: `Seat ${finalSeat} (${resolvedFloor}) is already occupied. Please pick another seat.` };
+    }
+
+    // Check rotational eligibility if this is an open/rotational check-in
+    if (!isFixedOwner) {
+      const rot = seatData.rotationalEligibility || "both";
+      if (rot === "none") {
+        return { success: false, error: `Seat ${finalSeat} is reserved for fixed seating only.` };
+      }
+    }
 
     const now = new Date();
     const payload = {
       studentId: student.id,
       studentName: student.name,
-      seatNumber: finalSeat, // The actual seat they are taking
+      seatNumber: finalSeat,
       seatFloor: resolvedFloor,
       planName: student.planName || "",
       date: getTodayStr(),
@@ -164,7 +251,6 @@ export const checkIn = async (student, selectedSeatNumber = null, selectedSeatFl
       createdAt: serverTimestamp()
     };
 
-    // Step 1: create the attendance record (must succeed).
     let attendanceRef = null;
     try {
       attendanceRef = await addDoc(collection(db, "attendance"), payload);
@@ -173,18 +259,20 @@ export const checkIn = async (student, selectedSeatNumber = null, selectedSeatFl
       return { success: false, error: e.message };
     }
 
-    // Step 2: mark the seat Occupied (best effort — works once new rules are deployed).
     try {
+      const occupantType = isFixedOwner ? "fixed" : "rotational";
       await updateDoc(seatDoc.ref, {
         status: "Occupied",
+        currentOccupantId: student.id,
+        currentOccupantName: student.name,
+        currentPlanName: student.planName || "",
+        currentCheckInTime: now.getTime(),
+        currentSessionId: attendanceRef.id,
+        occupantType,
+        conflict: null,
         lastUpdated: serverTimestamp()
       });
     } catch (e) {
-      if (isPermissionError(e)) {
-        console.warn("[attendance] checked in but seat map needs rules deploy:", e.message);
-        return { success: true, warning: "Checked in, but the seat map could not update. Ask staff to deploy the latest security rules." };
-      }
-      console.warn("[attendance] seat update failed:", e);
       return { success: true, warning: "Checked in, but the seat map could not update." };
     }
 
@@ -198,7 +286,6 @@ export const checkIn = async (student, selectedSeatNumber = null, selectedSeatFl
 export const checkOut = async (attendanceId, checkInTimestamp) => {
   try {
     if (!attendanceId) throw new Error("Missing attendance record.");
-    // 1. Get attendance record to know which seat to free up
     const docRef = doc(db, "attendance", attendanceId);
     let snap;
     try {
@@ -230,26 +317,65 @@ export const checkOut = async (attendanceId, checkInTimestamp) => {
       throw e;
     }
 
-    // 2. Free up the seat (best effort).
+    // Free up the seat occupancy (best effort, floor-aware).
+    // Preserves fixed assignment if present.
     if (attData.seatNumber) {
       try {
-        const seatQ = query(collection(db, "seats"), where("seatNumber", "==", attData.seatNumber));
-        const seatSnap = await getDocs(seatQ);
-        if (!seatSnap.empty) {
-          const seatDoc = seatSnap.docs[0];
-          const sData = seatDoc.data();
+        const floorHint = attData.seatFloor || "";
+        const stripPlain = (v) => {
+          const raw = String(v == null ? "" : v).trim().toUpperCase().replace(/\s+/g, "");
+          const m = raw.match(/^[AB]?0*(\d+)[AB]?$/);
+          if (m) return String(Number(m[1]));
+          const m2 = raw.match(/^([A-Z]+)-?0*(\d+)$/);
+          if (m2) return String(Number(m2[2]));
+          return raw;
+        };
+        const plainNum = stripPlain(attData.seatNumber);
+        const resolvedFloor = (floorHint || "").toLowerCase().includes("first") ? "First Floor" : "Ground Floor";
+        const docId = resolvedFloor === "First Floor" ? `first-${plainNum}` : `ground-${plainNum}`;
 
-          // If it's a fixed seat belonging to someone, revert to Reserved. Else Available.
-          let newStatus = "Available";
-          if (sData.assignedStudentId) newStatus = "Reserved";
+        let seatDoc = null;
+        try {
+          const directSnap = await getDoc(doc(db, "seats", docId));
+          if (directSnap.exists()) seatDoc = directSnap;
+        } catch (_) {}
 
-          await updateDoc(seatDoc.ref, {
-            status: newStatus,
-            lastUpdated: serverTimestamp()
-          });
+        if (!seatDoc) {
+          const seatQ = query(collection(db, "seats"), where("floor", "==", resolvedFloor));
+          const seatSnap = await getDocs(seatQ);
+          seatDoc = seatSnap.docs.find(d => {
+            const sn = d.data().seatNumber;
+            return sn === attData.seatNumber || stripPlain(sn) === plainNum;
+          }) || null;
+        }
+
+        if (!seatDoc) {
+          const seatQ = query(collection(db, "seats"), where("seatNumber", "==", attData.seatNumber));
+          const seatSnap = await getDocs(seatQ);
+          if (!seatSnap.empty) {
+            seatDoc = (floorHint && seatSnap.docs.find(d => ((d.data() || {}).floor || "") === floorHint)) || seatSnap.docs[0];
+          }
+        }
+
+        if (seatDoc) {
+          const sData = seatDoc.data() || {};
+          // Only clear if this student was the current occupant (or no occupant set)
+          if (!sData.currentOccupantId || sData.currentOccupantId === attData.studentId) {
+            const newStatus = sData.assignedStudentId ? "Reserved" : "Available";
+            await updateDoc(seatDoc.ref, {
+              status: newStatus,
+              currentOccupantId: null,
+              currentOccupantName: null,
+              currentPlanName: null,
+              currentCheckInTime: null,
+              currentSessionId: null,
+              occupantType: null,
+              conflict: null,
+              lastUpdated: serverTimestamp()
+            });
+          }
         }
       } catch (e) {
-        console.warn("[attendance] checked out but seat map needs rules deploy:", e && e.message);
         return { success: true, warning: "Checked out, but the seat map could not update." };
       }
     }

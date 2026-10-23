@@ -15,7 +15,7 @@
  */
 import {
   STATE, WIZARD_STEPS, detailsComplete, docsComplete, paymentComplete,
-  planRequiresSeat, saveDetails, savePlan, reserveSeat, releaseSeat,
+  planRequiresSeat, saveDetails, saveLibraryType, savePlan, reserveSeat, releaseSeat,
   submitPaymentAndApplication, loadStudentDocuments
 } from "./onboardingService.js";
 import { fetchPlansForDropdown } from "./admissionService.js";
@@ -43,13 +43,23 @@ const input = (id, type, value, attrs = "") =>
 /** Progress rail shared by every wizard step. */
 /** Which wizard steps are already complete — shared by the in-card rail and
  *  the sidebar rail so the two can never disagree. */
-const stepDoneMap = (state, student, documents, plan) => ({
-  DETAILS: detailsComplete(student),
-  DOCUMENTS: docsComplete(documents || {}),
-  PLAN: !!student.planId,
-  SEAT: planRequiresSeat(plan) ? !!student.seatNumber : true,
-  PAYMENT: paymentComplete(student)
-});
+const stepDoneMap = (state, student, documents, plan) => {
+  const detailsDone = detailsComplete(student);
+  const docsDone = detailsDone && docsComplete(documents || {});
+  const libDone = docsDone && !!student.libraryType;
+  const planDone = libDone && !!student.planId;
+  const seatDone = planDone && (planRequiresSeat(plan) ? !!student.seatNumber : true);
+  const payDone = (planRequiresSeat(plan) ? seatDone : planDone) && paymentComplete(student);
+
+  return {
+    DETAILS: detailsDone,
+    DOCUMENTS: docsDone,
+    LIBRARY_TYPE: libDone,
+    PLAN: planDone,
+    SEAT: seatDone,
+    PAYMENT: payDone
+  };
+};
 
 const progressHtml = (state, student, documents, plan) => {
   const done = stepDoneMap(state, student, documents, plan);
@@ -61,18 +71,22 @@ const progressHtml = (state, student, documents, plan) => {
         const isDone = done[step.key];
         const isActive = i === active;
         const skipped = step.key === STATE.SEAT && !planRequiresSeat(plan);
+        const canClick = isDone || i <= active;
         const num = isDone ? "✓" : i + 1;
         const color = isActive ? "var(--primary)" : (isDone ? "var(--success, #10b981)" : "var(--text-muted)");
         const bg = isActive ? "var(--primary)" : (isDone ? "rgba(16,185,129,.15)" : "var(--bg-hover)");
         return `
-          <div class="onb-step-item" style="flex:1;min-width:68px;text-align:center;opacity:${skipped ? .45 : 1};">
-            <div class="onb-step-circle" style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+          <div class="onb-step-item" id="onb-step-item-${step.key}"
+               ${canClick ? `onclick="if(window.__wizardGoToStep) window.__wizardGoToStep('${step.key}')"` : ''}
+               title="Step ${i + 1}: ${step.label} (${isActive ? 'Current' : isDone ? 'Completed' : 'Upcoming'})"
+               style="flex:1;min-width:68px;text-align:center;opacity:${skipped ? .45 : 1};transition:all .2s ease;${canClick ? 'cursor:pointer;' : ''}">
+            <div class="onb-step-circle" id="onb-step-circle-${step.key}" style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
                         margin:0 auto .4rem;font-size:12.5px;font-weight:700;color:${isActive ? "#fff" : color};
-                        background:${bg};border:2px solid ${isActive ? "var(--primary)" : (isDone ? "rgba(16,185,129,.4)" : "var(--border-bright)")};">
+                        background:${bg};border:2px solid ${isActive ? "var(--primary)" : (isDone ? "rgba(16,185,129,.4)" : "var(--border-bright)")};transition:all .2s ease;${isActive ? 'box-shadow: 0 0 0 3px rgba(152,49,50,0.18);' : ''}">
               ${num}
             </div>
-            <div class="onb-step-title" style="font-size:11.5px;font-weight:600;color:${isActive ? "var(--text-primary)" : "var(--text-muted)"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${step.label}</div>
-            ${skipped ? `<div style="font-size:10px;color:var(--text-muted);">n/a</div>` : ""}
+            <div class="onb-step-title" style="font-size:11.5px;font-weight:${isActive ? 700 : 600};color:${isActive ? "var(--text-primary)" : "var(--text-muted)"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${step.label}</div>
+            <div class="onb-step-sub" id="onb-step-sub-${step.key}" style="font-size:10px;color:var(--text-muted);min-height:14px;">${skipped ? 'n/a' : (step.key === STATE.SEAT ? 'Pick Seat' : '')}</div>
             <div style="height:3px;border-radius:2px;margin-top:.4rem;background:${isDone || isActive ? color : "var(--border)"};"></div>
           </div>`;
       }).join("")}
@@ -82,8 +96,7 @@ const progressHtml = (state, student, documents, plan) => {
 const shell = (state, student, documents, plan, body, footer) => `
   <div id="onb-wizard">
   <style>
-    /* Wizard controls — premium themed selects/inputs matching the portal.
-       Raw browser selects looked flat and unrelated to the app. */
+    /* Wizard controls — premium themed selects/inputs matching the portal. */
     #onb-wizard select,
     #onb-wizard input,
     #onb-wizard textarea {
@@ -128,14 +141,50 @@ const shell = (state, student, documents, plan, body, footer) => `
     #onb-wizard option:hover, #onb-wizard option:focus { background: var(--bg-hover); }
     #onb-wizard .form-group label { color: var(--text-primary); }
     #onb-wizard textarea { resize: vertical; line-height: 1.5; }
+
+    /* Button styles for wizard navigation */
+    #onb-wizard button[data-onb-back] {
+      min-width: 105px;
+      min-height: 44px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 10px;
+      border: 1.5px solid var(--border-bright);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    #onb-wizard button[data-onb-back]:hover {
+      background: var(--bg-card);
+      border-color: var(--primary);
+      color: var(--primary);
+      transform: translateX(-2px);
+    }
+    #onb-wizard button[data-onb-next] {
+      min-height: 44px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
     @media (max-width: 760px) {
       #onb-wizard .form-group { grid-column: 1 / -1 !important; }
     }
   </style>
   <div class="page-header" style="margin-bottom:1.25rem;">
     <div>
-      <h1>Complete Your Admission</h1>
-      <p class="page-subtitle">Step ${Math.max(1, WIZARD_STEPS.findIndex((s) => s.key === state) + 1)} of ${WIZARD_STEPS.length} — every field is required and your progress is saved automatically.</p>
+      <h1>${window.t ? window.t("onb.title", "Complete Your Admission") : "Complete Your Admission"}</h1>
+      <p class="page-subtitle">${window.t ? window.t("onb.subtitle", { current: Math.max(1, WIZARD_STEPS.findIndex((s) => s.key === state) + 1), total: WIZARD_STEPS.length }) : `Step ${Math.max(1, WIZARD_STEPS.findIndex((s) => s.key === state) + 1)} of ${WIZARD_STEPS.length} — every field is required and your progress is saved automatically.`}</p>
     </div>
   </div>
   <div class="card" style="padding:1.75rem;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);">
@@ -148,47 +197,186 @@ const shell = (state, student, documents, plan, body, footer) => `
   </div>`;
 
 /* --------------------------------------------------------------- step bodies */
-const detailsBody = (s) => `
-  <h3 style="font-size:15px;margin:0 0 1rem;">Personal details</h3>
-  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
-    ${field("onb-name", "Full name", input("onb-name", "text", s.name || "", 'required placeholder="Your full name"'), true)}
-    ${field("onb-phone", "Mobile", input("onb-phone", "tel", s.phone || "", 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
-    ${field("onb-parent-phone", "Parent mobile", input("onb-parent-phone", "tel", s.parentPhone || "", 'pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile (optional)"'), false)}
-    ${field("onb-email", "Email", input("onb-email", "email", s.email || "", 'required placeholder="you@example.com"'), true)}
-    ${field("onb-dob", "Date of birth", input("onb-dob", "date", s.dob || "", "required"), true)}
-    ${field("onb-gender", "Gender", `
-      <select id="onb-gender" required style="${FLD}">
-        <option value="">Select</option>
-        ${["Male", "Female", "Other"].map((g) => `<option value="${g}" ${s.gender === g ? "selected" : ""}>${g}</option>`).join("")}
-      </select>`, true)}
-    ${field("onb-college", "College / Institute", input("onb-college", "text", s.college || "", 'placeholder="Your college (optional)"'), false)}
-    ${field("onb-course", "Course", input("onb-course", "text", s.course || "", 'placeholder="e.g. B.Com, NEET (optional)"'), false)}
-        ${field("onb-address", "Address", `<textarea id="onb-address" rows="2" style="${FLD}" placeholder="Residential address (optional)">${esc(s.address || "")}</textarea>`, false, false)}
-        ${field("onb-remarks", "Remarks / Exam goal", `<textarea id="onb-remarks" rows="2" style="${FLD}" placeholder="What are you preparing for? (optional)">${esc(s.remarks || "")}</textarea>`, false, false)}
-  </div>`;
+const cleanDob = (val) => {
+  if (!val) return "";
+  if (typeof val === "string") {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+    if (val.includes("T")) return val.split("T")[0];
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(val)) {
+      const [d, m, y] = val.split("/");
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    return val;
+  }
+  if (val && typeof val.toDate === "function") {
+    try { return val.toDate().toISOString().split("T")[0]; } catch (_) {}
+  }
+  if (val && val.seconds) {
+    try { return new Date(val.seconds * 1000).toISOString().split("T")[0]; } catch (_) {}
+  }
+  return "";
+};
 
-const documentsBody = (s) => `
-  <h3 style="font-size:15px;margin:0 0 .35rem;">Identity documents</h3>
+const detailsBody = (s) => {
+  const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
+  const sName = s.name || s.fullName || s.studentName || "";
+  const sPhone = s.phone || s.mobile || s.contactNumber || s.loginId || "";
+  const sParentPhone = s.parentPhone || s.parentMobile || "";
+  const sEmail = s.email || s.authEmail || "";
+  const sDob = cleanDob(s.dob);
+  const sGender = s.gender || "";
+
+  return `
+  <h3 style="font-size:15px;margin:0 0 1rem;">${t("onb.personalDetails", "Personal details")}</h3>
+  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+    ${field("onb-name", t("onb.fullName", "Full name"), input("onb-name", "text", sName, 'required placeholder="Your full name"'), true)}
+    ${field("onb-phone", t("onb.mobile", "Mobile"), input("onb-phone", "tel", sPhone, 'required pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile"'), true)}
+    ${field("onb-parent-phone", t("onb.parentPhone", "Parent mobile (optional)"), input("onb-parent-phone", "tel", sParentPhone, 'pattern="[0-9]{10}" maxlength="10" placeholder="10-digit mobile (optional)"'), false)}
+    ${field("onb-email", t("onb.email", "Email"), input("onb-email", "email", sEmail, 'required placeholder="you@example.com"'), true)}
+    ${field("onb-dob", t("onb.dob", "Date of birth"), input("onb-dob", "date", sDob, "required"), true)}
+    ${field("onb-gender", t("onb.gender", "Gender"), `
+      <select id="onb-gender" required style="${FLD}">
+        <option value="">${t("onb.select", "Select")}</option>
+        ${[
+          { val: "Male", label: t("onb.male", "Male") },
+          { val: "Female", label: t("onb.female", "Female") },
+          { val: "Other", label: t("onb.other", "Other") }
+        ].map((g) => `<option value="${g.val}" ${sGender === g.val ? "selected" : ""}>${g.label}</option>`).join("")}
+      </select>`, true)}
+    ${field("onb-college", t("onb.college", "College / Institute"), input("onb-college", "text", s.college || "", 'placeholder="Your college (optional)"'), false)}
+    ${field("onb-course", t("onb.course", "Course"), input("onb-course", "text", s.course || "", 'placeholder="e.g. B.Com, NEET (optional)"'), false)}
+    ${field("onb-address", t("onb.address", "Address"), `<textarea id="onb-address" rows="2" style="${FLD}" placeholder="Residential address (optional)">${esc(s.address || "")}</textarea>`, false, false)}
+    ${field("onb-remarks", t("onb.remarks", "Remarks / Exam goal"), `<textarea id="onb-remarks" rows="2" style="${FLD}" placeholder="What are you preparing for? (optional)">${esc(s.remarks || "")}</textarea>`, false, false)}
+  </div>`;
+};
+
+const documentsBody = (s) => {
+  const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
+  return `
+  <h3 style="font-size:15px;margin:0 0 .35rem;">${t("onb.identityDocs", "Identity documents")}</h3>
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 1rem;">
-    Front and back of your Aadhaar card plus a selfie are required to verify your admission.
-    Images are compressed before upload and stay within the free Firestore plan.
+    ${t("onb.identityDocsDesc", "Front and back of your Aadhaar card plus a selfie are required to verify your admission. Images are compressed before upload and stay within the free Firestore plan.")}
   </p>
   <div id="onb-docs" style="margin-bottom:.5rem;"></div>
   <p id="onb-doc-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>`;
+};
 
-const planBody = (s, plans) => `
-  <h3 style="font-size:15px;margin:0 0 1rem;">Choose your membership plan</h3>
-  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
-    ${field("onb-plan", "Membership plan", `
-      <select id="onb-plan" required style="${FLD}">
-        <option value="">Choose a plan…</option>
-        ${plans.map((p) => `<option value="${esc(p.id)}" ${s.planId === p.id ? "selected" : ""}>${esc(p.planName || p.name)} — ₹${esc(p.price)}</option>`).join("")}
-      </select>`, true)}
-    ${field("onb-plan-note", "Seat selection", `
-      <div id="onb-plan-note" style="font-size:12.5px;color:var(--text-muted);padding-top:8px;">
-        Fixed-seat plans let you pick your seat in the next step. Others are assigned at the desk.
-      </div>`, false)}
-  </div>`;
+
+const libraryTypeBody = (s) => {
+  const current = s.libraryType || "Shreeji Reading Library";
+  const isPremium = current === "Shreeji Premium Reading Library";
+  return `
+    <h3 style="font-size:16px;font-weight:700;margin:0 0 .35rem;color:var(--text-primary);">Select Library Wing</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin:0 0 1.25rem;">
+      Choose between our standard reading library on Ground Floor or our premium air-conditioned reading library on First Floor.
+    </p>
+    <div class="onb-lib-type-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.25rem;margin-bottom:1.5rem;">
+      <!-- Standard / Shreeji Reading Library -->
+      <label id="card-lib-normal" class="lib-card" style="border:2px solid ${!isPremium ? 'var(--primary)' : 'var(--border-bright)'};border-radius:14px;padding:1.4rem;cursor:pointer;background:${!isPremium ? 'rgba(14,165,233,0.06)' : 'var(--bg-card)'};transition:all .2s ease;display:flex;flex-direction:column;position:relative;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem;">
+          <div style="display:flex;align-items:center;gap:.65rem;">
+            <input type="radio" name="onb-library-type" value="Shreeji Reading Library" ${!isPremium ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--primary);cursor:pointer;" />
+            <h4 style="margin:0;font-size:15px;font-weight:700;color:var(--text-primary);">Shreeji Reading Library</h4>
+          </div>
+          <span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">Ground Floor</span>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-secondary);line-height:1.5;margin:0 0 1rem;flex:1;">
+          Peaceful study environment with personal desk, high-speed Wi-Fi, power sockets, filtered water, and ground-floor accessibility.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;font-size:11.5px;color:var(--text-muted);">
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• Ground Floor</span>
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• Fixed / Rotational</span>
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• Seats L-1 to L-68</span>
+        </div>
+      </label>
+
+      <!-- Premium / Shreeji Premium Reading Library -->
+      <label id="card-lib-premium" class="lib-card" style="border:2px solid ${isPremium ? 'var(--primary)' : 'var(--border-bright)'};border-radius:14px;padding:1.4rem;cursor:pointer;background:${isPremium ? 'rgba(14,165,233,0.06)' : 'var(--bg-card)'};transition:all .2s ease;display:flex;flex-direction:column;position:relative;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem;">
+          <div style="display:flex;align-items:center;gap:.65rem;">
+            <input type="radio" name="onb-library-type" value="Shreeji Premium Reading Library" ${isPremium ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--primary);cursor:pointer;" />
+            <h4 style="margin:0;font-size:15px;font-weight:700;color:var(--text-primary);">Shreeji Premium Reading Library</h4>
+          </div>
+          <span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:rgba(245,158,11,0.18);color:#d97706;border:1px solid rgba(245,158,11,0.35);">1st Floor · Premium</span>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-secondary);line-height:1.5;margin:0 0 1rem;flex:1;">
+          Ultra-quiet air-conditioned zone, cushioned executive chairs, personal locker space, ambient lighting, and priority amenities on 1st Floor.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;font-size:11.5px;color:var(--text-muted);">
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• First Floor</span>
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• Fully Air Conditioned</span>
+          <span style="padding:2px 8px;border-radius:6px;background:var(--bg-hover);">• Seats P-1 to P-40</span>
+        </div>
+      </label>
+    </div>
+  `;
+};
+
+const planBody = (s, plans) => {
+  const isPremium = s.libraryType === "Shreeji Premium Reading Library";
+  const regularPlans = (plans || []).filter(p => {
+    if (p.libraryType) return p.libraryType === "Shreeji Reading Library" || !p.libraryType.toLowerCase().includes("premium");
+    const str = `${p.planName || p.name || ""} ${p.notes || ""}`.toLowerCase();
+    return !str.includes("premium") && !str.includes("first floor") && !str.includes("1st floor");
+  });
+  const premiumPlans = (plans || []).filter(p => {
+    if (p.libraryType) return p.libraryType === "Shreeji Premium Reading Library" || p.libraryType.toLowerCase().includes("premium");
+    const str = `${p.planName || p.name || ""} ${p.notes || ""}`.toLowerCase();
+    return str.includes("premium") || str.includes("first floor") || str.includes("1st floor");
+  });
+
+  const displayPlans = isPremium ? (premiumPlans.length ? premiumPlans : plans) : (regularPlans.length ? regularPlans : plans);
+
+  return `
+    <h3 style="font-size:16px;font-weight:700;margin:0 0 .35rem;color:var(--text-primary);">Choose your membership plan</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin:0 0 1.25rem;">
+      Select your category below — only matching plans and available seats will be shown.
+    </p>
+
+    <!-- Category Toggle: Regular vs Premium -->
+    <div style="margin-bottom:1.25rem;">
+      <label style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);display:block;margin-bottom:8px;">
+        LIBRARY CATEGORY *
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
+        <!-- Regular Card -->
+        <button type="button" id="onb-toggle-regular" class="onb-tier-btn" style="border:2px solid ${!isPremium ? 'var(--primary)' : 'var(--border-bright)'};background:${!isPremium ? 'rgba(14,165,233,0.08)' : 'var(--bg-card)'};border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;transition:all .15s ease;display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+            <strong style="font-size:13.5px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+              🏢 Regular Library
+            </strong>
+            <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(59,130,246,0.15);color:#3b82f6;">Ground Floor</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--text-secondary);">Standard quiet study desk · Ground floor</div>
+        </button>
+
+        <!-- Premium Card -->
+        <button type="button" id="onb-toggle-premium" class="onb-tier-btn" style="border:2px solid ${isPremium ? '#d97706' : 'var(--border-bright)'};background:${isPremium ? 'rgba(245,158,11,0.09)' : 'var(--bg-card)'};border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;transition:all .15s ease;display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+            <strong style="font-size:13.5px;color:${isPremium ? '#d97706' : 'var(--text-primary)'};display:flex;align-items:center;gap:6px;">
+              ⭐ Premium Library
+            </strong>
+            <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(245,158,11,0.18);color:#d97706;border:1px solid rgba(245,158,11,0.35);">1st Floor · Luxury AC</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--text-secondary);">Executive chairs, quiet AC zone & priority access</div>
+        </button>
+      </div>
+    </div>
+
+    <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+      ${field("onb-plan", "Membership plan", `
+        <select id="onb-plan" required style="${FLD};min-height:46px;font-size:14.5px;font-weight:600;">
+          <option value="">Choose a plan…</option>
+          ${displayPlans.map((p) => `<option value="${esc(p.id)}" ${s.planId === p.id ? "selected" : ""}>${esc(p.planName || p.name)} — ₹${esc(p.price)}</option>`).join("")}
+        </select>`, true)}
+      ${field("onb-plan-note", "Seat Selection Status", `
+        <div id="onb-plan-note" style="font-size:12.5px;color:var(--text-muted);padding-top:10px;line-height:1.4;">
+          Select a plan to see seat assignment details.
+        </div>`, false)}
+    </div>`;
+};
 
 /** Colour key for the seat picker — without it the grid is a wall of squares. */
 const seatLegend = () => `
@@ -219,6 +407,13 @@ const seatBody = () => `
 const paymentBody = (s, plan, amount) => `
   <h3 style="font-size:15px;margin:0 0 .5rem;">Select Payment Method</h3>
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 1.25rem;">Choose your preferred payment method to complete admission.</p>
+
+  <!-- Common Amount Box & Remarks Box -->
+  <div class="onb-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
+    ${field("onb-pay-amount", "Payment Amount (₹)", input("onb-pay-amount", "number", plan && plan.price ? plan.price : (s.amount || ""), 'placeholder="Amount to pay" min="1" required'), true)}
+    ${field("onb-pay-remarks", "Student Remarks (Optional)", input("onb-pay-remarks", "text", s.studentRemarks || s.remarks || "", 'placeholder="e.g. Paid cash at desk / special request"'), false)}
+  </div>
+
   <div class="onb-pay-grid" style="display:grid;grid-template-columns:1fr;gap:1rem;margin-bottom:1.25rem;">
     <!-- CASH OPTION -->
     <label id="onb-pay-cash-card" style="border:2px solid var(--border-bright);border-radius:12px;padding:1.1rem;cursor:pointer;background:var(--bg-hover);transition:all .15s ease;">
@@ -230,7 +425,7 @@ const paymentBody = (s, plan, amount) => `
         </strong>
       </div>
       <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">
-        Settle <strong>${esc(amount)}</strong> in cash at the reception desk. Staff will collect cash upon admission.
+        Settle in cash directly at the library reception desk. Staff will verify and approve your payment.
       </div>
       <div style="padding:8px 10px;border-radius:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);font-size:12px;color:var(--accent-emerald, #10b981);font-weight:600;">
         ✓ Direct desk payment · No transaction ID or screenshot needed
@@ -246,11 +441,21 @@ const paymentBody = (s, plan, amount) => `
           Pay Now (UPI)
         </strong>
       </div>
-      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">Scan QR, pay ${esc(amount)}, then enter the UPI Reference ID &amp; attach proof.</div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">Scan QR, pay the amount, then enter the UPI Reference ID &amp; attach proof.</div>
       <div id="onb-upi-fields" style="display:none;margin-top:.75rem;">
         <div style="text-align:center;margin:0.75rem 0;">
-          <img src="" class="payment-qr-img" alt="Scan to pay" style="width:140px;height:140px;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:#fff;padding:4px;" />
+          <img src="" class="payment-qr-img" alt="Scan to pay" style="width:140px;height:140px;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:#fff;padding:4px;cursor:pointer;" onclick="if(window.enlargeDocument) window.enlargeDocument(this.src, 'Payment QR Code')" />
           <div style="font-size:13px;font-weight:700;margin-top:.4rem;color:var(--text-primary);">Scan to pay <span style="color:var(--primary);">${esc(amount)}</span></div>
+          <div style="display:flex;gap:.5rem;justify-content:center;margin-top:.6rem;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.downloadPaymentQr()" style="font-size:12px;padding:5px 12px;display:inline-flex;align-items:center;gap:5px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download QR Code
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.copyLibraryUpi()" style="font-size:12px;padding:5px 12px;display:inline-flex;align-items:center;gap:5px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy UPI ID
+            </button>
+          </div>
         </div>
         ${field("onb-txn", "UPI Transaction ID", input("onb-txn", "text", s.transactionId || "", 'placeholder="12-digit UPI Ref / UTR number"'), true, false)}
         <div id="onb-shot-docs" style="margin-top:.75rem;"></div>
@@ -273,6 +478,30 @@ const paymentBody = (s, plan, amount) => `
     </label>
   </div>
   <p id="onb-pay-status" style="font-size:12.5px;color:var(--text-muted);"></p>`;
+
+window.downloadPaymentQr = () => {
+  const img = document.querySelector("img.payment-qr-img");
+  if (!img || !img.src || img.src.includes("<svg")) {
+    return toast("No QR code image available to download.", "warning");
+  }
+  const a = document.createElement("a");
+  a.href = img.src;
+  a.download = "Shreeji_Library_Payment_QR.png";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  toast("Payment QR downloaded.", "success");
+};
+
+window.copyLibraryUpi = async () => {
+  const upi = window.__libraryUpiId || "shreejilibrary@upi";
+  try {
+    await navigator.clipboard.writeText(upi);
+    toast("UPI ID copied: " + upi, "success");
+  } catch (_) {
+    prompt("Copy UPI ID:", upi);
+  }
+};
 
 function defaultDueDate() {
   const d = new Date();
@@ -375,35 +604,61 @@ export const paintWizardSidebar = (state, student, documents, plan) => {
     (WIZARD_STEPS.filter((s) => done[s.key]).length / WIZARD_STEPS.length) * 100
   );
 
+  const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
   nav.innerHTML = `
-    <div style="padding:.35rem .85rem .7rem;font-size:10.5px;font-weight:800;letter-spacing:.1em;color:var(--text-muted);">ADMISSION</div>
-    ${WIZARD_STEPS.map((step, i) => {
-      const isDone = !!done[step.key];
-      const isActive = i === active;
-      const ring = isActive ? "var(--primary)" : isDone ? "rgba(16,185,129,.55)" : "var(--border)";
-      const chip = isActive ? "#fff" : isDone ? "var(--success,#10b981)" : "var(--text-muted)";
-      const bg = isActive ? "var(--primary)" : isDone ? "rgba(16,185,129,.15)" : "var(--bg-hover)";
-      return `
-        <div class="nav-item" style="display:flex;gap:.65rem;align-items:center;padding:.6rem .85rem;margin:.15rem .5rem;border-radius:9px;
-              background:${isActive ? "var(--bg-hover)" : "transparent"};opacity:${isActive || isDone ? 1 : .72};">
-          <div style="width:26px;height:26px;flex:0 0 26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-                      font-size:12px;font-weight:800;color:${chip};background:${bg};border:2px solid ${ring};">
-            ${isDone ? "✓" : i + 1}
-          </div>
-          <div style="min-width:0;">
-            <div style="font-size:12.5px;font-weight:${isActive ? 700 : 600};color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${step.label}</div>
-            ${isActive ? `<div style="font-size:10.5px;color:var(--text-muted);">Current step</div>` : ""}
-          </div>
-        </div>`;
-    }).join("")}
-    <div style="margin:.65rem .85rem 0;padding:.7rem .75rem;border-radius:10px;background:var(--bg-hover);border:1px solid var(--border);">
-      <div style="height:5px;border-radius:999px;background:var(--border);overflow:hidden;">
-        <div style="height:100%;width:${pct}%;background:var(--primary);border-radius:999px;transition:width .3s;"></div>
-      </div>
-      <div style="font-size:10.5px;color:var(--text-muted);margin-top:.45rem;">${pct}% complete · saved automatically</div>
+    <div class="onb-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .95rem .75rem;">
+      <span style="font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--text-muted);text-transform:uppercase;">${t("onb.steps", "Admission Steps")}</span>
+      <span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:rgba(152,49,50,0.12);color:var(--primary);">${active + 1} / ${WIZARD_STEPS.length}</span>
     </div>
-    <div style="margin:.5rem .85rem 0;padding:.7rem .75rem;border-radius:10px;background:var(--bg-hover);font-size:11.5px;color:var(--text-muted);line-height:1.45;">
-      Every step saves before you move on — close the tab and you will resume right here.
+    <div class="onb-sidebar-steps-list">
+      ${WIZARD_STEPS.map((step, i) => {
+        const isDone = !!done[step.key];
+        const isActive = i === active;
+        const canClick = isDone || i <= active;
+        const ring = isActive ? "var(--primary)" : isDone ? "#10b981" : "var(--border)";
+        const chip = isActive ? "#fff" : isDone ? "#10b981" : "var(--text-muted)";
+        const bg = isActive ? "var(--primary)" : isDone ? "rgba(16,185,129,.14)" : "var(--bg-hover)";
+        const stepLabel = t(`onb.${step.key}`, step.label);
+        const subText = isActive
+          ? `<span style="color:var(--primary);font-weight:600;">${t("onb.inProgress", "In progress")}</span>`
+          : isDone
+            ? `<span style="color:#10b981;font-weight:500;">${t("onb.completed", "✓ Completed")}</span>`
+            : `<span style="color:var(--text-muted);">${step.hint || ""}</span>`;
+
+        return `
+          <div class="nav-item onb-step-nav-item ${isActive ? 'active' : ''}"
+               ${canClick ? `onclick="if(window.__wizardGoToStep) window.__wizardGoToStep('${step.key}')"` : ''}
+               title="Step ${i + 1}: ${stepLabel} (${isActive ? 'Current' : isDone ? 'Completed' : 'Upcoming'})"
+               style="display:flex;gap:.75rem;align-items:center;padding:.65rem .85rem;margin:.2rem .5rem;border-radius:10px;
+                      background:${isActive ? "var(--bg-hover)" : "transparent"};cursor:${canClick ? 'pointer' : 'default'};
+                      border:1px solid ${isActive ? "rgba(152,49,50,0.22)" : "transparent"};transition:all .15s ease;">
+            <div class="onb-step-circle" style="width:28px;height:28px;flex:0 0 28px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+                        font-size:12px;font-weight:800;color:${chip};background:${bg};border:2px solid ${ring};${isActive ? 'box-shadow:0 0 0 3px rgba(152,49,50,0.18);' : ''}">
+              ${isDone ? "✓" : i + 1}
+            </div>
+            <div class="onb-step-text" style="min-width:0;flex:1;">
+              <div style="font-size:13px;font-weight:${isActive ? 700 : 600};color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${stepLabel}
+              </div>
+              <div style="font-size:10.5px;line-height:1.2;margin-top:2px;">
+                ${subText}
+              </div>
+            </div>
+          </div>`;
+      }).join("")}
+    </div>
+    <div class="onb-sidebar-card" style="margin:.85rem .75rem 0;padding:.8rem .9rem;border-radius:12px;background:var(--bg-hover);border:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:700;color:var(--text-secondary);">${t("onb.steps", "Admission Steps")}</span>
+        <span style="font-size:11px;font-weight:800;color:var(--primary);">${pct}%</span>
+      </div>
+      <div style="height:5px;border-radius:999px;background:var(--border);overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--primary),#10b981);border-radius:999px;transition:width .3s ease;"></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-muted);margin-top:.5rem;display:flex;align-items:center;gap:5px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        ${t("onb.savedAuto", "Saved automatically")}
+      </div>
     </div>`;
 };
 
@@ -439,6 +694,7 @@ export const renderOnboarding = async (opts) => {
     });
   };
 
+  const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
   let body = "";
   let footer = "";
 
@@ -446,35 +702,42 @@ export const renderOnboarding = async (opts) => {
     case STATE.DETAILS:
       body = detailsBody(student);
       footer = `
-        <button class="btn btn-primary" data-onb-next style="flex:1;">Continue →</button>`;
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.continue", "Continue →")}</button>`;
       break;
 
     case STATE.DOCUMENTS:
       body = documentsBody(student);
       footer = `
-        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">← Back</button>
-        <button class="btn btn-primary" data-onb-next style="flex:1;">Continue →</button>`;
+        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">${t("onb.back", "← Back")}</button>
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.continue", "Continue →")}</button>`;
+      break;
+
+    case STATE.LIBRARY_TYPE:
+      body = libraryTypeBody(student);
+      footer = `
+        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">${t("onb.back", "← Back")}</button>
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.continue", "Continue →")}</button>`;
       break;
 
     case STATE.PLAN:
       body = planBody(student, plans);
       footer = `
-        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">← Back</button>
-        <button class="btn btn-primary" data-onb-next style="flex:1;">Continue →</button>`;
+        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">${t("onb.back", "← Back")}</button>
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.continue", "Continue →")}</button>`;
       break;
 
     case STATE.SEAT:
       body = seatBody();
       footer = `
-        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">← Back</button>
-        <button class="btn btn-primary" data-onb-next style="flex:1;">Reserve seat &amp; continue →</button>`;
+        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">${t("onb.back", "← Back")}</button>
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.reserveSeat", "Reserve seat & continue →")}</button>`;
       break;
 
     case STATE.PAYMENT:
       body = paymentBody(student, plan, amount);
       footer = `
-        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">← Back</button>
-        <button class="btn btn-primary" data-onb-next style="flex:1;">Submit application</button>`;
+        <button class="btn btn-ghost" data-onb-back style="flex:0 0 auto;">${t("onb.back", "← Back")}</button>
+        <button class="btn btn-primary" data-onb-next style="flex:1;">${t("onb.submitApplication", "Submit application")}</button>`;
       break;
 
     case STATE.PENDING:
@@ -496,43 +759,152 @@ export const renderOnboarding = async (opts) => {
   if (state === STATE.DOCUMENTS) {
     const status = document.getElementById("onb-doc-status");
     import("./documentUploadService.js").then(({ initDocumentUploads, getSelectedDocumentFiles, uploadAdmissionDocuments }) => {
-      // Identity step = Aadhaar front/back + photo ONLY. The payment
-      // screenshot lives on the PAYMENT step — rendering it here as well
-      // confused students (extra card + wrong count).
       initDocumentUploads("onb-docs", {
         keys: ["aadhaarFront", "aadhaarBack", "photo"],
-        title: "Identity documents",
-        note: "(all 3 required)"
+        title: t("onb.identityDocs", "Identity documents"),
+        note: t("onb.all3Required", "(all 3 required)"),
+        existingDocs: documents || student._documents || {}
       });
       window.__onbGetFiles = getSelectedDocumentFiles;
       window.__onbUploadFiles = uploadAdmissionDocuments;
       if (status) {
-        const have = [documents.aadhaarFront, documents.aadhaarBack, documents.photo].filter(Boolean).length;
+        const docStore = documents || student._documents || {};
+        const have = [docStore.aadhaarFront, docStore.aadhaarBack, docStore.photo || docStore.selfie].filter(Boolean).length;
         status.textContent = have === 3
-          ? "All three documents are already on file."
-          : have > 0 ? `${have} of 3 documents on file — please attach the rest.`
-                     : "None uploaded yet — all three are required.";
+          ? t("onb.allThreeOnFile", "All three documents are already on file.")
+          : have > 0 ? t("onb.docCountOnFile", { have })
+                     : t("onb.noneUploadedYet", "None uploaded yet — all three are required.");
       }
     }).catch((e) => { if (status) status.textContent = "Upload component unavailable: " + e.message; });
+  }
+
+  if (state === STATE.LIBRARY_TYPE) {
+    const cardNorm = document.getElementById("card-lib-normal");
+    const cardPrem = document.getElementById("card-lib-premium");
+    const syncLibCards = () => {
+      const premRadio = container.querySelector('input[name="onb-library-type"][value="Shreeji Premium Reading Library"]');
+      const isPrem = premRadio && premRadio.checked;
+      if (cardNorm) {
+        cardNorm.style.borderColor = !isPrem ? "var(--primary)" : "var(--border-bright)";
+        cardNorm.style.background = !isPrem ? "rgba(14,165,233,0.06)" : "var(--bg-card)";
+      }
+      if (cardPrem) {
+        cardPrem.style.borderColor = isPrem ? "var(--primary)" : "var(--border-bright)";
+        cardPrem.style.background = isPrem ? "rgba(14,165,233,0.06)" : "var(--bg-card)";
+      }
+    };
+    container.querySelectorAll('input[name="onb-library-type"]').forEach(r => r.addEventListener("change", syncLibCards));
+    syncLibCards();
   }
 
   if (state === STATE.PLAN) {
     const sel = document.getElementById("onb-plan");
     const note = document.getElementById("onb-plan-note");
-    const updateNote = () => {
-      const p = plans.find((x) => x.id === sel.value);
-      if (!note) return;
-      note.textContent = !p
-        ? "Fixed-seat plans let you pick your seat in the next step. Others are assigned at the desk."
-        : p.seatPreference === true
-          ? `${p.planName} is a fixed-seat plan — you will choose your seat in the next step.`
-          : `${p.planName} has no seat preference — your seat will be assigned at the desk.`;
+    const toggleReg = document.getElementById("onb-toggle-regular");
+    const togglePrem = document.getElementById("onb-toggle-premium");
+
+    const updateSeatRail = (p) => {
+      const seatRailItem = document.getElementById("onb-step-item-SEAT");
+      const seatRailSub = document.getElementById("onb-step-sub-SEAT");
+      const seatRailCircle = document.getElementById("onb-step-circle-SEAT");
+      
+      const requiresSeat = planRequiresSeat(p);
+      if (seatRailItem) {
+        seatRailItem.style.opacity = requiresSeat ? "1" : "0.45";
+      }
+      if (seatRailSub) {
+        seatRailSub.innerHTML = requiresSeat
+          ? `<span style="color:var(--primary);font-weight:700;">Pick Seat</span>`
+          : `n/a`;
+      }
+      if (seatRailCircle) {
+        if (requiresSeat) {
+          seatRailCircle.style.borderColor = "var(--primary)";
+          seatRailCircle.style.color = "var(--primary)";
+        } else {
+          seatRailCircle.style.borderColor = "var(--border-bright)";
+          seatRailCircle.style.color = "var(--text-muted)";
+        }
+      }
+      if (note) {
+        if (!p) {
+          note.innerHTML = `<span style="color:var(--text-muted);">Select a plan to view seat assignment.</span>`;
+        } else if (requiresSeat) {
+          note.innerHTML = `<span style="color:var(--accent-emerald, #10b981);font-weight:600;">✓ Fixed-Seat Plan:</span> You will choose your personal seat in the next step.`;
+        } else {
+          note.innerHTML = `<span style="color:var(--text-muted);"><span style="font-weight:600;">Assigned at desk:</span> This plan does not require reserved seat selection (shown as n/a in stepper above).</span>`;
+        }
+      }
     };
-    if (sel) { sel.addEventListener("change", updateNote); updateNote(); }
+
+    const populateDropdown = (category) => {
+      const isPrem = category === "premium";
+      const pool = (plans || []).filter(p => {
+        if (p.libraryType) {
+          return isPrem
+            ? (p.libraryType === "Shreeji Premium Reading Library" || p.libraryType.toLowerCase().includes("premium"))
+            : (p.libraryType === "Shreeji Reading Library" || !p.libraryType.toLowerCase().includes("premium"));
+        }
+        const str = `${p.planName || p.name || ""} ${p.notes || ""}`.toLowerCase();
+        return isPrem ? (str.includes("premium") || str.includes("first floor")) : (!str.includes("premium") && !str.includes("first floor"));
+      });
+
+      if (sel) {
+        const curVal = sel.value;
+        sel.innerHTML = `<option value="">Choose a plan…</option>` +
+          pool.map(p => `<option value="${esc(p.id)}" ${p.id === curVal || p.id === student.planId ? "selected" : ""}>${esc(p.planName || p.name)} — ₹${esc(p.price)}</option>`).join("");
+        
+        if (!sel.value && pool.length > 0) {
+          sel.value = pool[0].id;
+        }
+        const activePlan = pool.find(p => p.id === sel.value);
+        updateSeatRail(activePlan);
+      }
+    };
+
+    if (toggleReg && togglePrem) {
+      toggleReg.onclick = async () => {
+        student.libraryType = "Shreeji Reading Library";
+        student.seatFloor = "Ground Floor";
+        toggleReg.style.border = "2px solid var(--primary)";
+        toggleReg.style.background = "rgba(14,165,233,0.08)";
+        togglePrem.style.border = "2px solid var(--border-bright)";
+        togglePrem.style.background = "var(--bg-card)";
+        populateDropdown("regular");
+        try {
+          const { saveLibraryType } = await import("./onboardingService.js");
+          await saveLibraryType(student.id, "Shreeji Reading Library");
+        } catch (_) {}
+      };
+
+      togglePrem.onclick = async () => {
+        student.libraryType = "Shreeji Premium Reading Library";
+        student.seatFloor = "First Floor";
+        togglePrem.style.border = "2px solid #d97706";
+        togglePrem.style.background = "rgba(245,158,11,0.09)";
+        toggleReg.style.border = "2px solid var(--border-bright)";
+        toggleReg.style.background = "var(--bg-card)";
+        populateDropdown("premium");
+        try {
+          const { saveLibraryType } = await import("./onboardingService.js");
+          await saveLibraryType(student.id, "Shreeji Premium Reading Library");
+        } catch (_) {}
+      };
+    }
+
+    if (sel) {
+      sel.addEventListener("change", () => {
+        const p = plans.find(x => x.id === sel.value);
+        updateSeatRail(p);
+      });
+      const initialPlan = plans.find(x => x.id === sel.value);
+      updateSeatRail(initialPlan);
+    }
   }
 
   if (state === STATE.SEAT) {
     const status = document.getElementById("onb-seat-status");
+    const targetFloor = student.seatFloor || (student.libraryType === "Shreeji Premium Reading Library" ? "First Floor" : "Ground Floor");
     const prefill = () => {
       const numEl = document.getElementById("selectedSeatNumber");
       const idEl = document.getElementById("selectedSeatId");
@@ -540,15 +912,15 @@ export const renderOnboarding = async (opts) => {
       if (student.seatNumber) {
         if (numEl) numEl.value = student.seatNumber;
         if (idEl) idEl.value = student.seatId || student.seatNumber;
-        if (flEl) flEl.value = student.seatFloor || "Ground Floor";
-        if (status) status.innerHTML = `<span style="color:var(--accent-emerald, #10b981);font-weight:600;">Currently selected: seat ${student.seatNumber} (${student.seatFloor || "Ground Floor"}). Tap any available seat to change it.</span>`;
+        if (flEl) flEl.value = student.seatFloor || targetFloor;
+        if (status) status.innerHTML = `<span style="color:var(--accent-emerald, #10b981);font-weight:600;">Currently selected: seat ${student.seatNumber} (${student.seatFloor || targetFloor}). Tap any available seat to change it.</span>`;
         if (typeof window._signupSelectSeat === "function") {
-          window._signupSelectSeat(student.seatId || student.seatNumber, student.seatNumber, true, student.seatFloor || "Ground Floor");
+          window._signupSelectSeat(student.seatId || student.seatNumber, student.seatNumber, true, student.seatFloor || targetFloor);
         }
       }
     };
     import("./seatMapUI.js")
-      .then(({ initSeatMapUI }) => initSeatMapUI("signup", "onb-seat"))
+      .then(({ initSeatMapUI }) => initSeatMapUI("signup", "onb-seat", { floor: targetFloor }))
       .then(prefill)
       .catch((e) => { if (status) status.textContent = "Seat map unavailable: " + e.message; });
   }
@@ -559,16 +931,19 @@ export const renderOnboarding = async (opts) => {
       // card deliberately has no camera / Take Selfie button (file picker only).
       initDocumentUploads("onb-shot-docs", {
         keys: ["paymentScreenshot"],
-        title: "Payment Screenshot (Required)",
-        note: "(Required · 1 screenshot proof)"
+        title: t("onb.paymentScreenshotRequired", "Payment Screenshot (Required)"),
+        note: t("onb.paymentScreenshotRequired", "(Required · 1 screenshot proof)"),
+        existingDocs: {
+          paymentScreenshot: student.paymentScreenshotUrl || documents.paymentScreenshot || ""
+        }
       });
       window.__onbGetFiles = getSelectedDocumentFiles;
       window.__onbUploadFiles = uploadAdmissionDocuments;
       const shotCard = document.getElementById("doc-card-paymentScreenshot");
       if (shotCard) shotCard.style.gridColumn = "1 / -1";
-      if (student.paymentScreenshotUrl) {
+      if (student.paymentScreenshotUrl || documents.paymentScreenshot) {
         const st = document.getElementById("onb-pay-status");
-        if (st) st.textContent = "A payment screenshot is already attached.";
+        if (st) st.textContent = t("onb.paymentScreenshotOnFile", "A payment screenshot is already attached.");
       }
     }).catch(() => {});
     import("./qrService.js").then(({ paintQrImages }) => paintQrImages(container)).catch(() => {});
@@ -640,7 +1015,7 @@ export const renderOnboarding = async (opts) => {
   }
 
   const nextBtn = container.querySelector("[data-onb-next]");
-  if (nextBtn) nextBtn.addEventListener("click", () => runStep(state, student, plans, setBusy, onAdvance));
+  if (nextBtn) nextBtn.addEventListener("click", () => runStep(state, student, plans, setBusy, onAdvance, documents));
 };
 
 /* ------------------------------------------------------------------- save */
@@ -649,7 +1024,7 @@ const val = (id) => {
   return el ? String(el.value || "").trim() : "";
 };
 
-const runStep = async (state, student, plans, setBusy, onAdvance) => {
+const runStep = async (state, student, plans, setBusy, onAdvance, documents = {}) => {
   const id = student.id;
 
   try {
@@ -689,6 +1064,10 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       });
       setBusy(false);
       if (!res.success) return toast("Could not save: " + res.error, "error");
+      Object.assign(student, {
+        name, phone, dob, gender, college, course, address,
+        parentPhone, email, remarks
+      });
       toast("Details saved.", "success");
       return onAdvance(STATE.DOCUMENTS);
     }
@@ -696,17 +1075,26 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
     /* ---------------------------------------------------------- documents */
     if (state === STATE.DOCUMENTS) {
       const files = (window.__onbGetFiles && window.__onbGetFiles()) || {};
-      if (!files.aadhaarFront) return toast("Please attach the front of your Aadhaar card.", "warning");
-      if (!files.aadhaarBack) return toast("Please attach the back of your Aadhaar card.", "warning");
-      if (!files.photo) return toast("Please attach a selfie / photo.", "warning");
+      const docStore = documents || student._documents || {};
+      const hasFront = !!(files.aadhaarFront || docStore.aadhaarFront || docStore.aadhaarFrontUrl);
+      const hasBack = !!(files.aadhaarBack || docStore.aadhaarBack || docStore.aadhaarBackUrl);
+      const hasPhoto = !!(files.photo || docStore.photo || docStore.photoUrl || docStore.selfie || docStore.profilePhoto);
+
+      if (!hasFront) return toast("Please attach the front of your Aadhaar card.", "warning");
+      if (!hasBack) return toast("Please attach the back of your Aadhaar card.", "warning");
+      if (!hasPhoto) return toast("Please attach a selfie / photo.", "warning");
 
       setBusy(true, "Uploading…");
       try {
-        if (window.__onbUploadFiles) {
-          await window.__onbUploadFiles(
-            { aadhaarFront: files.aadhaarFront, aadhaarBack: files.aadhaarBack, photo: files.photo },
-            id
-          );
+        const filesToUpload = {};
+        if (files.aadhaarFront) filesToUpload.aadhaarFront = files.aadhaarFront;
+        if (files.aadhaarBack) filesToUpload.aadhaarBack = files.aadhaarBack;
+        if (files.photo) filesToUpload.photo = files.photo;
+
+        if (Object.keys(filesToUpload).length > 0 && window.__onbUploadFiles) {
+          const resMap = await window.__onbUploadFiles(filesToUpload, id);
+          Object.assign(docStore, resMap);
+          student._documents = { ...(student._documents || {}), ...resMap };
         }
         // Persist a flag so the state machine can see completion without a
         // second round-trip (the images live in studentDocuments, not here).
@@ -716,12 +1104,31 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
           hasDocuments: true,
           updatedAt: serverTimestamp()
         });
+        student.hasDocuments = true;
       } catch (e) {
         setBusy(false);
         return toast("Upload failed: " + (e.message || e), "error");
       }
       setBusy(false);
       toast("Documents uploaded.", "success");
+      return onAdvance(STATE.LIBRARY_TYPE);
+    }
+
+    /* -------------------------------------------------------- library type */
+    if (state === STATE.LIBRARY_TYPE) {
+      const selectedLibEl = document.querySelector('input[name="onb-library-type"]:checked');
+      const libraryType = selectedLibEl ? selectedLibEl.value : "Shreeji Reading Library";
+      const isPremium = libraryType === "Shreeji Premium Reading Library";
+      const floor = isPremium ? "First Floor" : "Ground Floor";
+
+      setBusy(true, "Saving…");
+      const res = await saveLibraryType(id, libraryType);
+      setBusy(false);
+      if (!res.success) return toast("Could not save: " + res.error, "error");
+
+      student.libraryType = libraryType;
+      student.seatFloor = floor;
+      toast(`Selected: ${libraryType} (${floor}).`, "success");
       return onAdvance(STATE.PLAN);
     }
 
@@ -738,6 +1145,14 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       setBusy(false);
       if (!res.success) return toast("Could not save: " + res.error, "error");
 
+      student.planId = plan.id;
+      student.planName = plan.planName || plan.name;
+      const isPrem = (plan.libraryType === "Shreeji Premium Reading Library") ||
+        (plan.planName && plan.planName.toLowerCase().includes("premium")) ||
+        (student.libraryType === "Shreeji Premium Reading Library");
+      student.libraryType = isPrem ? "Shreeji Premium Reading Library" : "Shreeji Reading Library";
+      student.seatFloor = isPrem ? "First Floor" : "Ground Floor";
+
       // Moving to a plan without seat selection releases a previously reserved seat.
       if (planRequiresSeat(plan) === false && prevSeat) await releaseSeat(prevSeat);
 
@@ -748,7 +1163,7 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
     /* --------------------------------------------------------------- seat */
     if (state === STATE.SEAT) {
       const seatNumber = val("selectedSeatNumber");
-      const seatFloor = val("selectedSeatFloor") || window.selectedSeatFloor || "Ground Floor";
+      const seatFloor = val("selectedSeatFloor") || window.selectedSeatFloor || student.seatFloor || (student.libraryType === "Shreeji Premium Reading Library" ? "First Floor" : "Ground Floor");
       if (!seatNumber) return toast("Please select a seat from the map.", "warning");
 
       setBusy(true, "Saving seat…");
@@ -773,6 +1188,8 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       const method = isCash ? "Cash" : (paid ? "Paid" : "Pay Later");
       const txnId = val("onb-txn");
       const dueDate = val("onb-due");
+      const payAmount = val("onb-pay-amount");
+      const payRemarks = val("onb-pay-remarks");
 
       if (!isCash && !paid && !dueDate) return toast("Please choose the date you will pay by.", "warning");
       if (paid && !txnId) return toast("Please enter the transaction ID from your payment.", "warning");
@@ -782,7 +1199,8 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
       try {
         if (paid) {
           const files = (window.__onbGetFiles && window.__onbGetFiles()) || {};
-          if (!files.paymentScreenshot && !student.paymentScreenshotUrl) {
+          const docStore = documents || student._documents || {};
+          if (!files.paymentScreenshot && !student.paymentScreenshotUrl && !docStore.paymentScreenshot) {
             setBusy(false);
             return toast("Please attach a screenshot of your payment.", "warning");
           }
@@ -795,7 +1213,9 @@ const runStep = async (state, student, plans, setBusy, onAdvance) => {
           paymentMethod: method,
           transactionId: isCash ? "CASH" : (paid ? txnId : ""),
           paymentDueDate: (!isCash && !paid) ? dueDate : "",
-          paymentScreenshotUrl: shot || student.paymentScreenshotUrl || ""
+          paymentScreenshotUrl: shot || student.paymentScreenshotUrl || (documents && documents.paymentScreenshot) || "",
+          amount: payAmount,
+          remarks: payRemarks
         });
         setBusy(false);
         if (!res.success) return toast("Could not submit: " + res.error, "error");

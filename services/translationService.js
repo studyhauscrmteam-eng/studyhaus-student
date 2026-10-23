@@ -31,13 +31,16 @@ export const setLanguage = async (lang) => {
 export const getLanguage = () => currentLanguage;
 
 window.t = (key, args = {}) => {
-  let text = translations[key] || key;
-  
-  // Replace variables like {{name}}
-  for (const [argKey, argValue] of Object.entries(args)) {
-    text = text.replace(new RegExp(`{{${argKey}}}`, 'g'), argValue);
+  let text = translations[key];
+  if (!text) {
+    if (typeof args === "string") return args;
+    return key;
   }
-  
+  if (typeof args === "object" && args !== null) {
+    for (const [argKey, argValue] of Object.entries(args)) {
+      text = text.replace(new RegExp(`{{${argKey}}}`, 'g'), argValue);
+    }
+  }
   return text;
 };
 

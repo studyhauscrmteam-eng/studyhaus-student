@@ -1,6 +1,7 @@
-import { collection, query, where, onSnapshot, getDocs, doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, onSnapshot, getDocs, doc, getDoc, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { db } from "../firebase/firebase.js";
+import { auth, db } from "../firebase/firebase.js";
+import { notifyAdmins } from "./notificationService.js";
 import { ensureStudentRecord } from "./onboardingService.js";
 
 /**
@@ -85,23 +86,92 @@ export const listenToStudentPortalData = (onDataUpdate, onError) => {
 
 
 /**
- * Updates the student's personal editable fields
+ * Submits student ID/detail changes for Admin approval (Task 5).
+ * Does NOT directly update the student profile until approved.
  */
-export const updateStudentOwnProfile = async (studentId, updates) => {
+export const submitProfileUpdateRequest = async (student, requestedChanges) => {
   try {
-    const docRef = doc(db, "students", studentId);
+    const authUid = (auth.currentUser ? auth.currentUser.uid : "") || student?.uid || student?.id || "";
+    const targetStudentId = student?.id || authUid;
+    if (!targetStudentId) throw new Error("Student profile not loaded. Please sign in again.");
     
-    // Explicitly pick only allowed fields for safety
-    const safeUpdates = {
-      updatedAt: serverTimestamp()
-    };
-    if (updates.email !== undefined) safeUpdates.email = updates.email;
-    if (updates.address !== undefined) safeUpdates.address = updates.address;
-    if (updates.parentPhone !== undefined) safeUpdates.parentPhone = updates.parentPhone;
+    const authEmail = auth?.currentUser?.email;
+    const realEmail = student?.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || "";
 
-    await updateDoc(docRef, safeUpdates);
-    return { success: true };
+    const payload = {
+      studentId: targetStudentId,
+      uid: authUid,
+      loginId: student?.loginId || realEmail || student?.phone || "",
+      studentName: student?.name || "Student",
+      studentPhone: student?.phone || "",
+      studentEmail: realEmail,
+      oldData: {
+        name: student.name || "",
+        phone: student.phone || "",
+        email: student.email || "",
+        college: student.college || "",
+        course: student.course || "",
+        parentPhone: student.parentPhone || "",
+        address: student.address || "",
+        photo: student.profilePhotoUrl || student.photoUrl || student.photo || ""
+      },
+      requestedChanges: { ...requestedChanges },
+      status: "Pending",
+      createdAt: serverTimestamp(),
+      reviewedAt: null,
+      reviewedBy: null
+    };
+
+    const docRef = await addDoc(collection(db, "profileUpdateRequests"), payload);
+
+    // Alert admin immediately in notifications & logs
+    try {
+      const keys = Object.keys(requestedChanges || {});
+      const desc = keys.includes("photo") ? "profile photo" : (keys.includes("aadhaarFront") || keys.includes("aadhaarBack") ? "identity document" : keys.join(", "));
+      await notifyAdmins({
+        type: "profile-update",
+        title: "Profile Change Request",
+        body: `Student ${student.name || "Student"} (${student.phone || "—"}) requested updates to: ${desc}. Waiting for your approval.`,
+        studentId: student.id
+      });
+    } catch (_) {}
+
+    return { success: true, id: docRef.id };
   } catch (error) {
+    console.error("submitProfileUpdateRequest error:", error);
     return { success: false, error: error.message };
   }
 };
+
+/**
+ * Listens to profile update requests for this student
+ */
+export const listenToMyProfileUpdateRequests = (studentId, callback) => {
+  if (!studentId) return () => {};
+  const q = query(
+    collection(db, "profileUpdateRequests"),
+    where("studentId", "==", studentId)
+  );
+  return onSnapshot(q, (snap) => {
+    const list = [];
+    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+    list.sort((a, b) => {
+      const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt || 0);
+      const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt || 0);
+      return tb - ta;
+    });
+    callback(list);
+  }, (err) => {
+    console.warn("listenToMyProfileUpdateRequests error:", err);
+    callback([]);
+  });
+};
+
+/**
+ * Deprecated direct update — routed through approval workflow (Task 5)
+ */
+export const updateStudentOwnProfile = async (studentId, updates) => {
+  // Routes to submitProfileUpdateRequest
+  return { success: false, error: "Profile updates require Admin approval. Please submit a change request." };
+};
+

@@ -18,7 +18,7 @@ let selfieStream = null;
  * @param {File} file
  * @returns {Promise<string>} base64 data URL
  */
-const compressImage = (file) => {
+export const compressImage = (file) => {
   return new Promise((resolve, reject) => {
     if (!file.type.startsWith("image/")) {
       // For non-images (e.g. PDF), read as base64 directly (no compression)
@@ -231,9 +231,51 @@ export const loadGlobalDocuments = async () => {
  * @param {string} studentId
  * @returns {Promise<Object|null>}
  */
-export const loadStudentDocuments = async (studentId) => {
-  const snap = await getDoc(doc(db, "studentDocuments", studentId));
-  return snap.exists() ? snap.data() : null;
+export const loadStudentDocuments = async (studentId, fallbackStudent = null) => {
+  if (!studentId && !fallbackStudent) return null;
+
+  const candidates = new Set();
+  const addCandidate = (val) => {
+    if (val && typeof val === "string") {
+      const trimmed = val.trim();
+      if (trimmed) candidates.add(trimmed);
+    }
+  };
+
+  addCandidate(studentId);
+  if (fallbackStudent && typeof fallbackStudent === "object") {
+    addCandidate(fallbackStudent.id);
+    addCandidate(fallbackStudent.uid);
+    addCandidate(fallbackStudent.studentId);
+    addCandidate(fallbackStudent.admissionNo);
+  }
+
+  // 1. Direct getDoc on each candidate ID
+  for (const cid of candidates) {
+    try {
+      const snap = await getDoc(doc(db, "studentDocuments", cid));
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d && Object.keys(d).length > 0) return d;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Query studentDocuments collection by studentId or uid field
+  for (const cid of candidates) {
+    try {
+      const { query, collection, where, getDocs, limit } = await import("firebase/firestore");
+      const q1 = query(collection(db, "studentDocuments"), where("studentId", "==", cid), limit(1));
+      const s1 = await getDocs(q1);
+      if (!s1.empty) return s1.docs[0].data();
+
+      const q2 = query(collection(db, "studentDocuments"), where("uid", "==", cid), limit(1));
+      const s2 = await getDocs(q2);
+      if (!s2.empty) return s2.docs[0].data();
+    } catch (_) {}
+  }
+
+  return null;
 };
 
 /**
@@ -421,7 +463,7 @@ export const renderStudentDocuments = async (studentId, containerId = "student-d
 
     const preview = hasFile
       ? (isImage
-        ? `<img src="${base64}" alt="${label}" style="width:100%;height:110px;object-fit:cover;border-radius:8px;background:#000;">`
+        ? `<img src="${base64}" alt="${label}" onclick="window.enlargeDocument(this.src, '${label}')" title="Click to view & enlarge" style="width:100%;height:110px;object-fit:cover;border-radius:8px;background:#000;cursor:pointer;">`
         : `<div style="width:100%;height:110px;border-radius:8px;background:var(--bg-hover);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;">
              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
              <span style="font-size:11px;color:var(--text-muted);">File</span>
@@ -439,12 +481,14 @@ export const renderStudentDocuments = async (studentId, containerId = "student-d
           <button type="button" class="btn btn-primary" style="width:100%;font-size:12px;padding:7px;${hasFile ? "" : "opacity:.45;cursor:not-allowed;"}"
             ${hasFile ? `onclick="window.__downloadStudentDoc('${key}')"` : "disabled"}>Download</button>
           <label class="btn btn-secondary" style="width:100%;font-size:12px;padding:7px;margin:0;cursor:pointer;text-align:center;">
-            ${hasFile ? "Replace" : "Upload"}
+            ${containerId === "student-own-documents" ? (hasFile ? "Request Replace" : "Upload Document") : (hasFile ? "Replace" : "Upload")}
             <input type="file" accept="${accept}" style="display:none;"
               onchange="window.__uploadStudentDoc('${studentId}', '${key}', this, '${containerId}')" />
           </label>
-          ${hasFile ? `<button type="button" class="btn btn-ghost" style="width:100%;font-size:11px;padding:5px;color:#ef4444;"
-            onclick="window.__removeStudentDoc('${studentId}', '${key}', '${containerId}')">Remove</button>` : ""}
+          ${containerId === "student-own-documents"
+            ? `<div style="font-size:10px; color:var(--text-muted); text-align:center;">Requires Admin Approval</div>`
+            : (hasFile ? `<button type="button" class="btn btn-ghost" style="width:100%;font-size:11px;padding:5px;color:#ef4444;"
+                onclick="window.__removeStudentDoc('${studentId}', '${key}', '${containerId}')">Remove</button>` : "")}
         </div>
       </div>`;
   }
@@ -468,6 +512,28 @@ if (typeof window !== "undefined") {
   window.__uploadStudentDoc = async (studentId, key, input, containerId) => {
     const file = input && input.files && input.files[0];
     if (!file) return;
+
+    if (containerId === "student-own-documents") {
+      notify(`Compressing and submitting ${file.name} for admin approval…`, "info");
+      try {
+        const base64 = await compressImage(file);
+        const { submitProfileUpdateRequest } = await import("./studentPortalService.js");
+        const currentStudent = window.currentStudent || { id: studentId };
+        const res = await submitProfileUpdateRequest(currentStudent, { [key]: base64 });
+        if (res.success) {
+          notify("Document update request submitted! Admin will verify and approve.", "success");
+        } else {
+          notify("Failed to submit request: " + res.error, "error");
+        }
+      } catch (err) {
+        console.error("Student document change request error:", err);
+        notify("Failed: " + (err.message || err), "error");
+      } finally {
+        if (input) input.value = "";
+      }
+      return;
+    }
+
     notify(`Uploading ${file.name}…`, "info");
     try {
       await uploadStudentDocument(studentId, key, file);
@@ -491,6 +557,10 @@ if (typeof window !== "undefined") {
   };
 
   window.__removeStudentDoc = async (studentId, key, containerId) => {
+    if (containerId === "student-own-documents") {
+      notify("Verified documents cannot be deleted directly. Contact library admin.", "error");
+      return;
+    }
     if (!confirm("Remove this document?")) return;
     try {
       await removeStudentDocument(studentId, key);
@@ -623,7 +693,7 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
       ${types.map(d => {
     if (d.key === "photo") {
       // Single photo card: click uploads a file, dedicated button takes a
-      // live selfie — both write the SAME `photo` field. No duplicates.
+      // live selfie — both write the SAME photo field. No duplicates.
       return `
             <div id="doc-card-${d.key}" style="
               border:2px dashed var(--border-bright);border-radius:12px;padding:1rem .75rem;
@@ -634,7 +704,7 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
                 style="display:none;" data-key="${d.key}" />
               <div id="doc-preview-${d.key}" style="display:none;margin-bottom:.5rem;position:relative;">
                 <img id="doc-img-${d.key}" style="width:100%;height:76px;object-fit:cover;
-                  border-radius:8px;" src="" alt="preview" />
+                  border-radius:8px;cursor:pointer;" src="" alt="preview" onclick="event.stopPropagation();window.enlargeDocument(this.src, '${d.label}')" title="Click to view & enlarge" />
                 <button type="button"
                   onclick="event.stopPropagation();window.__clearDocUpload('${d.key}')"
                   style="position:absolute;top:3px;right:3px;background:rgba(244,63,94,.9);
@@ -651,10 +721,10 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
               <div style="display:flex;gap:.4rem;margin-top:.6rem;">
                 <button type="button" onclick="event.stopPropagation();document.getElementById('doc-input-${d.key}').click()"
                   style="flex:1;padding:8px 6px;border-radius:9px;border:1px solid var(--border-bright);
-                  background:var(--bg-hover);color:var(--text-primary);font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload</button>
+                  background:var(--bg-hover);color:var(--text-primary);font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> ${window.t ? window.t("common.upload", "Upload") : "Upload"}</button>
                 <button type="button" onclick="event.stopPropagation();window.__openSelfieCamera()"
                   style="flex:1;padding:8px 6px;border-radius:9px;border:1px solid transparent;
-                  background:var(--accent-emerald,#10b981);color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Selfie</button>
+                  background:var(--accent-emerald,#10b981);color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> ${window.t ? window.t("common.selfie", "Selfie") : "Selfie"}</button>
               </div>
             </div>
           `;
@@ -669,7 +739,7 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
                 style="display:none;" data-key="${d.key}" />
               <div id="doc-preview-${d.key}" style="display:none;margin-bottom:.5rem;position:relative;">
                 <img id="doc-img-${d.key}" style="width:100%;height:76px;object-fit:cover;
-                  border-radius:8px;" src="" alt="preview" />
+                  border-radius:8px;cursor:pointer;" src="" alt="preview" onclick="event.stopPropagation();window.enlargeDocument(this.src, '${d.label}')" title="Click to view & enlarge" />
                 <button type="button"
                   onclick="event.stopPropagation();window.__clearDocUpload('${d.key}')"
                   style="position:absolute;top:3px;right:3px;background:rgba(244,63,94,.9);
@@ -779,6 +849,39 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
     });
   });
 
+  // Hydrate any pre-existing documents on file
+  const existingDocs = opts.existingDocs || {};
+  DOC_TYPES.forEach(({ key, label }) => {
+    let existingVal = existingDocs[key] || existingDocs[`${key}Url`];
+    if (key === "photo" && !existingVal) {
+      existingVal = existingDocs.selfie || existingDocs.profilePhoto || existingDocs.profilePhotoUrl;
+    }
+    if (existingVal && typeof existingVal === "string" && existingVal.trim().length > 0) {
+      const img = document.getElementById(`doc-img-${key}`);
+      const preview = document.getElementById(`doc-preview-${key}`);
+      const placeholder = document.getElementById(`doc-placeholder-${key}`);
+      const nameEl = document.getElementById(`doc-name-${key}`);
+      const card = document.getElementById(`doc-card-${key}`);
+
+      if (img && preview && placeholder && nameEl && card) {
+        const isRenderable = existingVal.startsWith("data:") || existingVal.startsWith("http://") || existingVal.startsWith("https://") || existingVal.startsWith("/");
+        if (isRenderable) {
+          img.src = existingVal;
+          preview.style.display = "block";
+          placeholder.style.display = "none";
+        }
+        nameEl.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;font-weight:600;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          ${window.t ? window.t("onb.uploadedOnFile", "Uploaded & verified on file") : "Uploaded & verified on file"}
+        </span>`;
+        nameEl.style.display = "block";
+        nameEl.style.color = "var(--accent-emerald, #10b981)";
+        card.style.borderColor = "var(--accent-emerald, #10b981)";
+        card.style.background = "rgba(16,185,129,.06)";
+      }
+    }
+  });
+
   // Global handlers for selfie camera
   window.__openSelfieCamera = async () => {
     if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -856,14 +959,32 @@ export const initDocumentUploads = (containerId = "doc-upload-section", opts = {
       const inp = document.getElementById(`doc-input-${key}`);
       if (inp) inp.value = "";
     } else {
-      document.getElementById(`doc-input-${key}`).value = "";
+      const inp = document.getElementById(`doc-input-${key}`);
+      if (inp) inp.value = "";
     }
-    document.getElementById(`doc-preview-${key}`).style.display = "none";
-    document.getElementById(`doc-placeholder-${key}`).style.display = "block";
-    document.getElementById(`doc-name-${key}`).style.display = "none";
+    const prev = document.getElementById(`doc-preview-${key}`);
+    if (prev) prev.style.display = "none";
+    const ph = document.getElementById(`doc-placeholder-${key}`);
+    if (ph) ph.style.display = "block";
+    const nameEl = document.getElementById(`doc-name-${key}`);
+    if (nameEl) {
+      nameEl.style.display = "none";
+      nameEl.textContent = "";
+    }
     const card = document.getElementById(`doc-card-${key}`);
-    card.style.borderColor = "";
-    card.style.background = "";
+    if (card) {
+      card.style.borderColor = "";
+      card.style.background = "";
+    }
+    if (opts.existingDocs) {
+      delete opts.existingDocs[key];
+      delete opts.existingDocs[`${key}Url`];
+      if (key === "photo") {
+        delete opts.existingDocs.selfie;
+        delete opts.existingDocs.profilePhoto;
+        delete opts.existingDocs.profilePhotoUrl;
+      }
+    }
   };
 };
 

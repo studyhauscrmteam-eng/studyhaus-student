@@ -45,12 +45,12 @@ export const initAuthGuard = () => {
       if (__nullTimer) { clearTimeout(__nullTimer); __nullTimer = null; }
       // User is logged in
       try {
+        let userDoc = null;
         // Fetch role if not in localStorage or to ensure it's up to date
         let role = localStorage.getItem("userRole");
         if (!role) {
           // Role not cached — fetch from Firestore (student credential only:
           // admitted students live at students/{uid}, pending/new at users/{uid}).
-          let userDoc = null;
           let docId = user.uid;
 
           // 1. Admitted students.
@@ -65,19 +65,26 @@ export const initAuthGuard = () => {
             } catch (_) { /* ignore permission errors */ }
           }
 
-          // 3. Default to Student if doc found but role field is missing
-          if (userDoc && !userDoc.role) {
-            userDoc.role = "Student";
+          // 3. Fallback: self-heal via ensureStudentRecord (for newly created student accounts)
+          if (!userDoc) {
+            try {
+              const { ensureStudentRecord } = await import("../services/onboardingService.js");
+              docId = await ensureStudentRecord();
+              userDoc = await retryWithBackoff(() => getDocument("students", docId));
+            } catch (e) {
+              console.warn("[guard] ensureStudentRecord self-heal:", e);
+            }
           }
 
-          if (userDoc && userDoc.role) {
-            role = userDoc.role;
-            localStorage.setItem("userRole", role);
-            localStorage.setItem("userId", docId);
+          // 4. Default to Student in the student portal
+          if (!userDoc || !userDoc.role) {
+            role = "Student";
           } else {
-            // No role found in DB — sign out cleanly
-            throw new Error("User role not found.");
+            role = userDoc.role;
           }
+
+          localStorage.setItem("userRole", role);
+          localStorage.setItem("userId", (userDoc && (userDoc.id || docId)) || user.uid);
         } else {
           // Role was already in localStorage (e.g. set right after registration).
           // Ensure userId is also stored.
@@ -86,15 +93,40 @@ export const initAuthGuard = () => {
           }
         }
 
+        if (userDoc && (
+          userDoc.loginRevoked === true ||
+          userDoc.portalAccessDisabled === true ||
+          userDoc.status === "Old" ||
+          userDoc.status === "Old Student" ||
+          userDoc.status === "disabled" ||
+          userDoc.status === "Inactive"
+        )) {
+          localStorage.removeItem("userRole");
+          localStorage.removeItem("userId");
+          localStorage.removeItem("userName");
+          await logout();
+          window.location.href = "/login.html";
+          return;
+        }
+
         if (isPublicPage) {
           let userDocRevokeCheck = null;
           try {
             userDocRevokeCheck = await getDocument("students", user.uid);
             if (!userDocRevokeCheck) userDocRevokeCheck = await getDocument("users", user.uid);
           } catch (_) {}
-          if (userDocRevokeCheck && userDocRevokeCheck.loginRevoked === true) {
+          const isAccessDisabled = userDocRevokeCheck && (
+            userDocRevokeCheck.loginRevoked === true ||
+            userDocRevokeCheck.portalAccessDisabled === true ||
+            userDocRevokeCheck.status === "Old" ||
+            userDocRevokeCheck.status === "Old Student" ||
+            userDocRevokeCheck.status === "disabled" ||
+            userDocRevokeCheck.status === "Inactive"
+          );
+          if (isAccessDisabled) {
             localStorage.removeItem("userRole");
             localStorage.removeItem("userId");
+            localStorage.removeItem("userName");
             await logout();
             if (loader) loader.style.display = "none";
             return;
@@ -102,62 +134,84 @@ export const initAuthGuard = () => {
           // Redirect logged-in users away from login page to their dashboard
           window.location.href = getRedirectUrlForRole(role);
         } else {
-          // ── Resolve display name ──────────────────────────────────────
-          // Priority: Firestore name → email prefix → "User"
-          let userDoc2 = null;
-          const actualDocId = localStorage.getItem("userId") || user.uid;
-          try {
-            userDoc2 = await getDocument("students", actualDocId);
-            if (!userDoc2) userDoc2 = await getDocument("users", actualDocId);
-            if (!userDoc2) userDoc2 = await getDocument("users", user.uid);
-          } catch (_) { }
+          // ── Fast Unblock & Route Protection ────────────────────────
+          protectRoute(role, currentPath);
 
-          if (userDoc2 && (userDoc2.loginRevoked === true || userDoc2.status === "disabled" || userDoc2.status === "Inactive" || userDoc2.status === "Old" || userDoc2.status === "Old Student")) {
-            localStorage.removeItem("userRole");
-            localStorage.removeItem("userId");
-            await logout();
-            window.location.href = "/login.html";
-            return;
-          }
-
-          const displayName = (userDoc2 && userDoc2.name)
-            ? userDoc2.name
-            : (user.email ? user.email.split("@")[0] : "User");
-
-          // Initials for avatar (e.g. "Admin User" → "AU")
-          const initials = displayName
-            .split(" ")
-            .filter(Boolean)
-            .slice(0, 2)
-            .map(w => w[0].toUpperCase())
-            .join("") || "?";
-
-          // Time-based greeting
-          const hour = new Date().getHours();
-          const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-
-          // ── Update DOM ────────────────────────────────────────────────
-          const nameEl = document.getElementById("current-user-name");
-          const topbarNameEl = document.getElementById("topbar-user-name");
+          // Fast-render user role and cached greeting immediately (0ms delay)
           const roleEl = document.getElementById("current-user-role");
           const topbarRoleEl = document.getElementById("topbar-user-role");
-          const avatarEl = document.getElementById("current-user-avatar");
-          const topbarAvatarEl = document.getElementById("topbar-user-avatar");
-          const greetEl = document.getElementById("dashboard-greeting");
-
-          if (nameEl) nameEl.textContent = displayName;
-          if (topbarNameEl) topbarNameEl.textContent = displayName;
           if (roleEl) roleEl.textContent = role;
           if (topbarRoleEl) topbarRoleEl.textContent = role;
-          // Don't clobber a photo avatar already rendered by the portal —
-          // only write initials into text-only placeholders.
-          if (avatarEl && !avatarEl.querySelector("img")) avatarEl.textContent = initials;
-          if (topbarAvatarEl && !topbarAvatarEl.querySelector("img")) topbarAvatarEl.textContent = initials;
-          if (greetEl) greetEl.textContent = `${timeGreeting}, ${displayName.split(" ")[0]}!`;
 
-          // If on a protected page, check permissions
-          protectRoute(role, currentPath);
+          const cachedName = localStorage.getItem("userName");
+          if (cachedName) {
+            const nameEl = document.getElementById("current-user-name");
+            const topbarNameEl = document.getElementById("topbar-user-name");
+            const greetEl = document.getElementById("dashboard-greeting");
+            if (nameEl) nameEl.textContent = cachedName;
+            if (topbarNameEl) topbarNameEl.textContent = cachedName;
+            const hour = new Date().getHours();
+            const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+            if (greetEl) greetEl.textContent = `${timeGreeting}, ${cachedName.split(" ")[0]}!`;
+          }
+
+          // Unblock the page immediately — don't make the student wait on Firestore!
           if (loader) loader.style.display = "none";
+
+          // ── Resolve display name in background (non-blocking) ──────
+          (async () => {
+            let userDoc2 = null;
+            const actualDocId = localStorage.getItem("userId") || user.uid;
+            try {
+              userDoc2 = await getDocument("students", actualDocId);
+              if (!userDoc2) userDoc2 = await getDocument("users", actualDocId);
+              if (!userDoc2) userDoc2 = await getDocument("users", user.uid);
+            } catch (_) { }
+
+            if (userDoc2 && (
+              userDoc2.loginRevoked === true ||
+              userDoc2.portalAccessDisabled === true ||
+              userDoc2.status === "disabled" ||
+              userDoc2.status === "Inactive" ||
+              userDoc2.status === "Old" ||
+              userDoc2.status === "Old Student"
+            )) {
+              localStorage.removeItem("userRole");
+              localStorage.removeItem("userId");
+              localStorage.removeItem("userName");
+              await logout();
+              window.location.href = "/login.html";
+              return;
+            }
+
+            const displayName = (userDoc2 && userDoc2.name)
+              ? userDoc2.name
+              : (user.email ? user.email.split("@")[0] : (cachedName || "User"));
+
+            localStorage.setItem("userName", displayName);
+
+            const initials = displayName
+              .split(" ")
+              .filter(Boolean)
+              .slice(0, 2)
+              .map(w => w[0].toUpperCase())
+              .join("") || "?";
+
+            const hour = new Date().getHours();
+            const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+
+            const nameEl = document.getElementById("current-user-name");
+            const topbarNameEl = document.getElementById("topbar-user-name");
+            const avatarEl = document.getElementById("current-user-avatar");
+            const topbarAvatarEl = document.getElementById("topbar-user-avatar");
+            const greetEl = document.getElementById("dashboard-greeting");
+
+            if (nameEl) nameEl.textContent = displayName;
+            if (topbarNameEl) topbarNameEl.textContent = displayName;
+            if (avatarEl && !avatarEl.querySelector("img")) avatarEl.textContent = initials;
+            if (topbarAvatarEl && !topbarAvatarEl.querySelector("img")) topbarAvatarEl.textContent = initials;
+            if (greetEl) greetEl.textContent = `${timeGreeting}, ${displayName.split(" ")[0]}!`;
+          })();
         }
       } catch (error) {
         console.error("Auth Guard Error:", error);
@@ -168,6 +222,12 @@ export const initAuthGuard = () => {
           localStorage.removeItem("userId");
         }
         if (!isPublicPage) {
+          const cachedRole = localStorage.getItem("userRole");
+          if (cachedRole === "Student" && normPath.includes("/student/")) {
+            console.warn("Recovering from Auth Guard error in student portal; allowing page to render.");
+            if (loader) loader.style.display = "none";
+            return;
+          }
           window.location.href = "/unauthorized.html";
         } else if (loader) {
           loader.style.display = "none";

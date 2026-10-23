@@ -7,7 +7,9 @@ import {
   setPersistence,
   browserLocalPersistence,
   getAuth,
-  updatePassword
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential
 } from "firebase/auth";
 import { initializeApp, deleteApp } from "firebase/app";
 import { doc, getDoc } from "firebase/firestore";
@@ -324,3 +326,45 @@ export const verifyPortalCredentials = async (loginId, password) => {
     await deleteApp(secondaryApp).catch(() => {});
   }
 };
+
+/**
+ * Changes password for currently authenticated user
+ * @param {string} currentPassword
+ * @param {string} newPassword
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+export const changeUserPassword = async (currentPassword, newPassword) => {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error("You must be logged in to change your password.");
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error("New password must be at least 6 characters.");
+    }
+
+    if (currentPassword && user.email) {
+      const cred = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, cred);
+    }
+    await updatePassword(user, newPassword);
+
+    // Alert admin in system logs
+    try {
+      const { notifyAdmins } = await import("./notificationService.js");
+      await notifyAdmins({
+        type: "security",
+        title: "Security: Student Password Changed",
+        body: `Student account (${user.email || user.uid}) successfully updated their login password.`,
+        studentId: user.uid
+      });
+    } catch (_) {}
+
+    return { success: true };
+  } catch (error) {
+    console.error("changeUserPassword error:", error);
+    let msg = error.message;
+    if (error.code === "auth/wrong-password") msg = "Current password is incorrect.";
+    if (error.code === "auth/requires-recent-login") msg = "Please enter your current password to verify your identity.";
+    return { success: false, error: msg };
+  }
+};
+

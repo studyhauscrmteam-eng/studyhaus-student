@@ -29,6 +29,7 @@ export const STATE = {
   REJECTED: "REJECTED",
   DETAILS: "DETAILS",
   DOCUMENTS: "DOCUMENTS",
+  LIBRARY_TYPE: "LIBRARY_TYPE",
   PLAN: "PLAN",
   SEAT: "SEAT",
   PAYMENT: "PAYMENT",
@@ -40,6 +41,7 @@ export const STATE = {
 export const WIZARD_STEPS = [
   { key: STATE.DETAILS, label: "Details", hint: "Personal information" },
   { key: STATE.DOCUMENTS, label: "Documents", hint: "Aadhaar & selfie" },
+  { key: STATE.LIBRARY_TYPE, label: "Library", hint: "Normal vs Premium" },
   { key: STATE.PLAN, label: "Plan", hint: "Choose membership" },
   { key: STATE.SEAT, label: "Seat", hint: "Pick your seat" },
   { key: STATE.PAYMENT, label: "Payment", hint: "Pay later or pay now" }
@@ -88,6 +90,7 @@ export const resolvePortalState = (student, documents, plan) => {
 
   if (!detailsComplete(student)) return STATE.DETAILS;
   if (!docsComplete(documents || {})) return STATE.DOCUMENTS;
+  if (!has(student.libraryType)) return STATE.LIBRARY_TYPE;
   if (!has(student.planId)) return STATE.PLAN;
   if (planRequiresSeat(plan) && !has(student.seatNumber)) return STATE.SEAT;
   if (!paymentComplete(student)) return STATE.PAYMENT;
@@ -511,6 +514,22 @@ export const saveDetails = async (studentId, details) => {
   }
 };
 
+export const saveLibraryType = async (studentId, libraryType) => {
+  try {
+    const isPremium = libraryType === "Shreeji Premium Reading Library";
+    const floor = isPremium ? "First Floor" : "Ground Floor";
+    await updateDoc(doc(db, "students", studentId), {
+      libraryType: libraryType || "Shreeji Reading Library",
+      seatFloor: floor,
+      preferredFloor: floor,
+      updatedAt: serverTimestamp()
+    });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
+
 export const savePlan = async (studentId, plan) => {
   try {
     await updateDoc(doc(db, "students", studentId), {
@@ -649,7 +668,7 @@ export const releaseSeat = async (seatNumber) => {
  *
  * Idempotent: re-submitting an already-submitted application is a no-op.
  */
-export const submitPaymentAndApplication = async (studentId, { paymentMethod, transactionId, paymentDueDate, paymentScreenshotUrl }) => {
+export const submitPaymentAndApplication = async (studentId, { paymentMethod, transactionId, paymentDueDate, paymentScreenshotUrl, amount, remarks }) => {
   try {
     const auth = getAuth();
     const uid = auth.currentUser.uid;
@@ -677,17 +696,18 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         throw new Error("This application has already been approved.");
       }
 
+      const numAmount = Number(amount) > 0 ? Number(amount) : (Number(current.planPrice || current.amount) || 0);
+
       const payload = {
         paymentMethod: isCash ? "Cash" : paymentMethod,
+        paymentMode: isCash ? "Cash" : "UPI",
         transactionId: isCash ? "CASH" : (transactionId || ""),
         paymentScreenshotUrl: isCash ? "" : (paymentScreenshotUrl || ""),
+        amount: numAmount,
+        studentRemarks: remarks || "",
+        remarks: remarks || "",
         termsAccepted: true,
         updatedAt: now,
-        // THE gate for the admin's admission alert. This is the last step of
-        // the onboarding wizard, so flipping it here is exactly "after the
-        // student fills the entire onboarding form — then and only then".
-        // `submittedAt` is also where the admin's 7-day auto-expire counts
-        // from, so a long-abandoned sign-up still gets its full week.
         applicationReady: true,
         submittedAt: now
       };
@@ -760,7 +780,11 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
             studentName: fresh.name || "",
             planId: fresh.planId || "",
             planName: fresh.planName || "",
-            amount: planPrice,
+            amount: Number(amount) > 0 ? Number(amount) : planPrice,
+            paymentMethod: isCashMode ? "Cash" : paymentMethod,
+            paymentMode: isCashMode ? "Cash" : "UPI",
+            studentRemarks: remarks || "",
+            remarks: remarks || "",
             renewalPeriod: renewalMonths > 0 ? renewalMonths : 1,
             renewalMonths,
             renewalDays,

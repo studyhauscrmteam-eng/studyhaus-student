@@ -389,5 +389,19 @@ service cloud.firestore {
     match /tasks/{taskId} {
       allow read, write: if isStaff();
     }
+    match /settings/{docId} {
+      allow read: if signedIn();
+      allow write: if isStaff();
+    }
+    match /notifications/{notificationId} {
+      allow read: if isStaff() || (signedIn() && resource.data.get('studentId', '') == request.auth.uid);
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
+    match /profileUpdateRequests/{requestId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isStaff();
+    }
   }
 }

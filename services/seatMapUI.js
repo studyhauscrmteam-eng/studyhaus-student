@@ -1,5 +1,5 @@
-import { listenToAllSeats, assignSeat, unassignSeat, changeSeatStatus, seedInitialSeats, reconcileSeatOccupancy, cleanupNonPlanSeats, saveSeatPosition, renameSeat, addSeatAt, deleteSeatById } from "./seatService.js";
-import { getDocs, collection, query, where } from "firebase/firestore";
+import { listenToAllSeats, assignSeat, unassignSeat, changeSeatStatus, seedInitialSeats, reconcileSeatOccupancy, cleanupNonPlanSeats, saveSeatPosition, renameSeat, addSeatAt, deleteSeatById, formatSeatCode, autoFindAlternativeSeat, reassignRotationalOccupant, resolveSeatConflict, setSeatRotationalEligibility } from "./seatService.js";
+import { getDocs, collection, query, where, doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 
 let allSeats = [];
@@ -13,10 +13,164 @@ let seatHealthOrphans = [];
 let layoutEditMode = false;
 let dragSeatId = null;
 
+// ── Seat hover card: student photo + name on an assigned seat ───────────────
+// Bigger accent-styled card that opens ABOVE the tile (flips below only when
+// there is no room on top). Shared by the Seat Map and the Live Seat Map —
+// callers pass the seat object itself (window.__seatHoverShow(seat, el)).
+let seatHoverCard = null;
+let seatHoverCurrent = null;
+const seatHoverPhotoCache = {}; // studentId → dataURL | null
+
+const ensureHoverCard = () => {
+  if (seatHoverCard) return seatHoverCard;
+  seatHoverCard = document.createElement("div");
+  seatHoverCard.id = "seat-hover-card";
+  seatHoverCard.style.cssText = "position:fixed; z-index:99990; display:none; pointer-events:none; background:var(--bg-card); border:1px solid var(--border); border-left:4px solid var(--primary); border-radius:14px; padding:16px 18px; box-shadow:0 18px 45px rgba(0,0,0,0.45); gap:14px; align-items:center; min-width:260px;";
+  document.body.appendChild(seatHoverCard);
+  return seatHoverCard;
+};
+
+const seatHoverPhoto = async (studentId) => {
+  if (!studentId) return null;
+  if (studentId in seatHoverPhotoCache) return seatHoverPhotoCache[studentId];
+  let url = null;
+  try {
+    const sSnap = await getDoc(doc(db, "students", studentId));
+    if (sSnap.exists()) {
+      const v = sSnap.data() || {};
+      url = v.profilePhotoUrl || v.photoUrl || null;
+    }
+    if (!url) {
+      const dSnap = await getDoc(doc(db, "studentDocuments", studentId));
+      if (dSnap.exists()) url = (dSnap.data() || {}).photo || null;
+    }
+  } catch (_) { url = null; }
+  seatHoverPhotoCache[studentId] = url;
+  return url;
+};
+
+const seatHoverStatusLabel = (status) => {
+  if (status === "Conflict") return "Conflict Detected";
+  if (status === "Reserved") return "Assigned (Fixed Plan)";
+  if (status === "Occupied") return "Checked In";
+  return status || "";
+};
+
+window.__seatHoverShow = async (seatOrId, el) => {
+  const seat = typeof seatOrId === "string" ? allSeats.find(s => s.id === seatOrId) : seatOrId;
+  if (!seat) return;
+
+  const card = ensureHoverCard();
+  seatHoverCurrent = seat.id || (seat.floor + "-" + seat.seatNumber);
+
+  // 1. Fixed Assignment
+  const fixedName = seat.assignedStudentName || "None";
+  const isRotGuest = seat.occupantType === "rotational";
+
+  // 2. Real-Time Occupant
+  // Only an Occupied or Conflict seat has someone physically sitting in it right now.
+  // Reserved (assigned but absent) / Available / Maintenance seats are Vacant in real time.
+  const isPhysicallyOccupied = (seat.status === "Occupied" || seat.status === "Conflict") && !!(seat.currentOccupantName || seat.currentOccupantId);
+  let rtoDisplay = "Vacant";
+  let rtoTag = "";
+  if (isPhysicallyOccupied) {
+    rtoDisplay = seat.currentOccupantName || "Occupied";
+    if (isRotGuest) {
+      rtoTag = `<span style="display:inline-block; font-size:10.5px; font-weight:700; color:#4f46e5; background:rgba(99,102,241,0.12); padding:1px 6px; border-radius:4px; margin-left:4px;">Guest</span>`;
+    } else {
+      rtoTag = `<span style="display:inline-block; font-size:10.5px; font-weight:700; color:#059669; background:rgba(16,185,129,0.12); padding:1px 6px; border-radius:4px; margin-left:4px;">Owner</span>`;
+    }
+  }
+
+  // 3. Eligibility (Human-readable)
+  const eligText = (() => {
+    const e = seat.rotationalEligibility;
+    if (e === "day") return "Day Shift Only";
+    if (e === "night") return "Night Shift Only";
+    if (e === "none") return "Fixed Only";
+    return "Both (Day & Night)";
+  })();
+
+  // Card Header Title & Photo ID
+  let headerTitle = "Available Seat";
+  let activeStudentId = null;
+  let initials = "—";
+
+  if (isPhysicallyOccupied && seat.currentOccupantName) {
+    headerTitle = seat.currentOccupantName;
+    activeStudentId = seat.currentOccupantId;
+    initials = headerTitle.trim().substring(0, 2).toUpperCase();
+  } else if (seat.assignedStudentName) {
+    headerTitle = seat.assignedStudentName;
+    activeStudentId = seat.assignedStudentId;
+    initials = headerTitle.trim().substring(0, 2).toUpperCase();
+  } else if (seat.status === "Maintenance") {
+    headerTitle = "Under Maintenance";
+  } else if (seat.status === "Inactive") {
+    headerTitle = "Inactive Seat";
+  } else if (seat.status === "Reserved") {
+    headerTitle = "Reserved Seat";
+  } else {
+    headerTitle = "Available Seat";
+  }
+
+  // Conflict warning
+  let conflictAlert = "";
+  if (seat.status === "Conflict" || seat.conflict) {
+    conflictAlert = `
+      <div style="font-size:11px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; border-radius:6px; padding:3px 6px; margin-top:5px; font-weight:700;">
+        Owner Arrival Conflict: Reassign guest to free chair
+      </div>
+    `;
+  }
+
+  const photoHtml = activeStudentId
+    ? `<div id="seat-hover-photo" style="width:48px; height:48px; border-radius:12px; background:var(--bg-hover); color:var(--text-secondary); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px; overflow:hidden; flex-shrink:0;">${initials}</div>`
+    : `<div style="width:48px; height:48px; border-radius:12px; background:var(--bg-hover); color:var(--text-muted); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+       </div>`;
+
+  card.innerHTML = `
+    ${photoHtml}
+    <div style="min-width:0; flex:1;">
+      <div style="font-weight:700; font-size:14.5px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:215px;">${headerTitle}</div>
+      <div style="font-size:11.5px; color:var(--text-secondary); margin-top:3px; line-height:1.5;">
+        <div><span style="color:var(--text-muted);">Status:</span> <strong style="color:var(--text-primary);">${seatHoverStatusLabel(seat.status)}</strong></div>
+        <div><span style="color:var(--text-muted);">Fixed Assignment:</span> <strong style="color:var(--text-primary);">${fixedName}</strong></div>
+        <div><span style="color:var(--text-muted);">Real-Time Occupant (RTO):</span> <strong style="color:var(--text-primary);">${rtoDisplay}</strong>${rtoTag}</div>
+        <div><span style="color:var(--text-muted);">Eligibility:</span> <span style="font-weight:600; color:var(--text-secondary);">${eligText}</span></div>
+      </div>
+      ${conflictAlert}
+    </div>`;
+  card.style.display = "flex";
+  const rect = el.getBoundingClientRect();
+  const cardW = card.offsetWidth || 270;
+  const cardH = card.offsetHeight || 110;
+  let top = rect.top - cardH - 10;
+  if (top < 8) top = rect.bottom + 10;
+  let left = rect.left + (rect.width / 2) - (cardW / 2);
+  left = Math.max(10, Math.min(left, window.innerWidth - cardW - 10));
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+  const photo = await seatHoverPhoto(activeStudentId);
+  if (seatHoverCurrent !== activeStudentId + "|" + (seat.seatNumber || "")) return;
+  if (photo) {
+    const ph = card.querySelector("#seat-hover-photo");
+    if (ph) ph.innerHTML = `<img src="${photo}" style="width:100%;height:100%;object-fit:cover;display:block;" alt="" />`;
+  }
+};
+window.__seatHoverHide = () => {
+  seatHoverCurrent = null;
+  if (seatHoverCard) seatHoverCard.style.display = "none";
+};
+
 // ── Seat naming helpers ─────────────────────────────────────────────────────
 // Plain numbers only: Ground 1-68, First 1-40. Floor disambiguates duplicates.
-// Legacy "A20"/"B15" docs normalize to plain numbers; anything non-numeric
-// (e.g. "R1") falls back to the generic responsive grid.
+// Legacy "A20"/"B15" docs are migrated by cleanupNonPlanSeats; anything
+// non-numeric (e.g. "R1") falls back to the generic responsive grid.
 const AB_SEAT_PATTERN = /^\d+$/;
 const NUMERIC_SEAT_PATTERN = /^\d+$/;
 
@@ -51,6 +205,7 @@ const isLightTheme = () => !!(document.body && document.body.classList.contains(
 
 const seatPalette = (status) => {
   if (isLightTheme()) {
+    if (status === "Conflict") return { bg: "#fef3c7", border: "2px solid #f59e0b", color: "#b45309" };
     if (status === "Available") return { bg: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534" };
     if (status === "Occupied") return { bg: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" };
     if (status === "Reserved") return { bg: "#fffbeb", border: "1px solid #fde68a", color: "#92400e" };
@@ -58,6 +213,7 @@ const seatPalette = (status) => {
     if (status === "Pending") return { bg: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" };
     return { bg: "var(--bg-hover)", border: "1px dashed var(--border-bright)", color: "var(--text-muted)" };
   }
+  if (status === "Conflict") return { bg: "rgba(245,158,11,0.22)", border: "2px solid rgba(245,158,11,0.85)", color: "#fcd34d" };
   if (status === "Available") return { bg: "rgba(34,197,94,0.14)", border: "1px solid rgba(34,197,94,0.45)", color: "#4ade80" };
   if (status === "Occupied") return { bg: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.45)", color: "#f87171" };
   if (status === "Reserved") return { bg: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.45)", color: "#fbbf24" };
@@ -90,25 +246,40 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     // "checkin" context: the student is choosing where to SIT NOW, so both
     // green (Available) and amber (Reserved but empty) seats are pickable.
     const isCheckinContext = !!opts && opts.context === "checkin";
+    const isPremium = Boolean(
+      opts.isPremium ||
+      (opts.floor && opts.floor.toLowerCase().includes("first")) ||
+      (opts.libraryType && opts.libraryType.toLowerCase().includes("premium"))
+    );
+    const lockFloor = Boolean(opts.lockFloor || opts.floor || opts.isPremium !== undefined);
+    const targetFloor = isPremium ? "First Floor" : (opts.floor || "Ground Floor");
 
     container.innerHTML = `
       <div style="padding: 0.5rem 0 0.75rem;">
-        <!-- Floor tabs -->
-        <div style="display:inline-flex; gap:0.5rem; background:var(--bg-hover); padding:4px; border-radius:999px; margin-bottom:1rem;">
-          <button id="signup-tab-ground" onclick="window._signupSwitchFloor('Ground Floor')"
-            style="border:none; background:var(--bg-card); color:var(--text-primary); padding:5px 14px; border-radius:999px; font-weight:500; font-size:12px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
-            Ground Floor
-          </button>
-          <button id="signup-tab-first" onclick="window._signupSwitchFloor('First Floor')"
-            style="border:none; background:transparent; color:var(--text-secondary); padding:5px 14px; border-radius:999px; font-weight:500; font-size:12px; cursor:pointer;">
-            First Floor
-          </button>
-        </div>
+        <!-- Floor Header / Tabs -->
+        ${lockFloor ? `
+          <div style="display:inline-flex; align-items:center; gap:0.5rem; background:${isPremium ? 'rgba(245,158,11,0.12)' : 'rgba(59,130,246,0.12)'}; padding:6px 14px; border-radius:999px; margin-bottom:1rem; border:1px solid ${isPremium ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.3)'};">
+            <span style="font-size:12px; font-weight:700; color:${isPremium ? '#d97706' : '#2563eb'}; display:flex; align-items:center; gap:6px;">
+              ${isPremium ? '⭐ First Floor · Premium Reading Zone (Seats P-1 to P-40)' : '🏢 Ground Floor · Standard Reading Zone (Seats L-1 to L-68)'}
+            </span>
+          </div>
+        ` : `
+          <div style="display:inline-flex; gap:0.5rem; background:var(--bg-hover); padding:4px; border-radius:999px; margin-bottom:1rem;">
+            <button id="signup-tab-ground" onclick="window._signupSwitchFloor('Ground Floor')"
+              style="border:none; background:${targetFloor === 'Ground Floor' ? 'var(--bg-card)' : 'transparent'}; color:${targetFloor === 'Ground Floor' ? 'var(--text-primary)' : 'var(--text-secondary)'}; padding:5px 14px; border-radius:999px; font-weight:500; font-size:12px; cursor:pointer; box-shadow:${targetFloor === 'Ground Floor' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'};">
+              Ground Floor
+            </button>
+            <button id="signup-tab-first" onclick="window._signupSwitchFloor('First Floor')"
+              style="border:none; background:${targetFloor === 'First Floor' ? 'var(--bg-card)' : 'transparent'}; color:${targetFloor === 'First Floor' ? 'var(--text-primary)' : 'var(--text-secondary)'}; padding:5px 14px; border-radius:999px; font-weight:500; font-size:12px; cursor:pointer; box-shadow:${targetFloor === 'First Floor' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'};">
+              First Floor
+            </button>
+          </div>
+        `}
         <!-- Legend -->
         <div class="signup-seat-legend" style="display:flex; gap:0.6rem; margin-bottom:0.85rem; flex-wrap:wrap; align-items:center;">
           <span class="seat-legend-chip avail">● Available</span>
           <span class="seat-legend-chip occ">● Occupied</span>
-          <span class="seat-legend-chip res">${isCheckinContext ? "● Reserved — pickable" : "● Reserved"}</span>
+          <span class="seat-legend-chip res">${isCheckinContext ? "● Preferred — pickable" : "● Preferred"}</span>
           <span class="seat-legend-chip sel">✓ Selected</span>
         </div>
         <!-- Seat grid -->
@@ -118,7 +289,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     `;
 
     let signupAllSeats = [];
-    let signupCurrentFloor = "Ground Floor";
+    let signupCurrentFloor = targetFloor;
     let signupSelectedId = null;
 
     const renderSignupSeats = () => {
@@ -143,13 +314,13 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         return arr;
       };
 
-      const SEAT_TILE_H = "52px";
       const renderSignupSeatCard = (seatNumStr) => {
         let seat = findSeatByLayoutName(floorSeats, seatNumStr);
+        const seatDisplayCode = formatSeatCode(seatNumStr, seat ? (seat.floor || signupCurrentFloor) : signupCurrentFloor, seat ? (seat.planType || seat.type) : "");
         
         if (!seat) {
           return `
-            <div style="background:var(--bg-hover); border:1px dashed var(--border-bright); border-radius: 10px; height: ${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; box-sizing:border-box; display: flex; align-items: center; justify-content: center; color:var(--text-muted); font-size: 13px; font-weight:700; cursor: not-allowed; opacity: 0.55; width: 100%; flex:0 0 ${SEAT_TILE_H};" title="Seat not available">
+            <div style="background:var(--bg-hover); border:1px dashed var(--border-bright); border-radius: 8px; height: 46px; display: flex; align-items: center; justify-content: center; color:var(--text-muted); font-size: 13px; cursor: not-allowed; opacity: 0.55; width: 100%;" title="Seat not available">
               ${seatNumStr}
             </div>
           `;
@@ -158,7 +329,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         const scope = document.querySelector("dialog[open]") || document;
         const curSelectedNum = ((scope.querySelector && scope.querySelector("#selectedSeatNumber")) || document.getElementById("selectedSeatNumber"))?.value;
         const curSelectedId = ((scope.querySelector && scope.querySelector("#selectedSeatId")) || document.getElementById("selectedSeatId"))?.value;
-        const isCurrentPick = (curSelectedNum && String(seat.seatNumber) === String(curSelectedNum)) || (curSelectedId && (seat.id === curSelectedId || seat.seatNumber === curSelectedId));
+        const isCurrentPick = (curSelectedNum && (String(seat.seatNumber) === String(curSelectedNum) || seatDisplayCode === String(curSelectedNum))) || (curSelectedId && (seat.id === curSelectedId || seat.seatNumber === curSelectedId));
         const isSelected = seat.id === signupSelectedId || isCurrentPick;
         const isPickable = isCheckinContext ? (seat.status === "Available" || seat.status === "Reserved") : (seat.status === "Available" || isSelected);
 
@@ -171,14 +342,13 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         return `
           <div
             onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable}, '${seat.floor || signupCurrentFloor}')"
-            title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
+            title="${seat.status} (${seatDisplayCode})${!isPickable ? ' – not selectable' : ''}"
             style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
-                   border-radius:10px; height:${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; box-sizing:border-box; display:flex; align-items:center;
-                   justify-content:center; cursor:${cursor}; transition:transform .12s, box-shadow .15s, border-color .15s;
-                   font-size:13.5px; font-weight:700; letter-spacing:.02em; width: 100%; flex:0 0 ${SEAT_TILE_H};
-                   box-shadow:0 1px 2px rgba(0,0,0,.07);"
-            onmouseover="if(${isPickable}) { this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 14px rgba(0,0,0,.18)'; }"
-            onmouseout="this.style.transform='none'; this.style.boxShadow='0 1px 2px rgba(0,0,0,.07)';"
+                   border-radius:8px; height:46px; display:flex; align-items:center;
+                   justify-content:center; cursor:${cursor}; transition:box-shadow 0.15s, border-color 0.15s;
+                   font-size:13px; font-weight:600; width: 100%;"
+            onmouseover="if(${isPickable}) { this.style.boxShadow='0 0 0 2px currentColor'; }"
+            onmouseout="this.style.boxShadow='none';"
           >
             ${isSelected ? "✓ " : ""}${seat.seatNumber}
           </div>
@@ -186,10 +356,10 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       };
 
       const renderSignupCustomColHtml = (arr) => {
-        let colHtml = `<div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; align-items: stretch;">`;
+        let colHtml = `<div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">`;
         arr.forEach(num => { 
           if(num === null) {
-            colHtml += `<div style="height: ${SEAT_TILE_H}; min-height:${SEAT_TILE_H}; width: 100%; flex:0 0 ${SEAT_TILE_H};"></div>`;
+            colHtml += `<div style="height: 46px; width: 100%;"></div>`;
           } else {
             colHtml += renderSignupSeatCard(num); 
           }
@@ -238,12 +408,11 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
               onclick="window._signupSelectSeat('${seat.id}', '${seat.seatNumber}', ${isPickable}, '${seat.floor || signupCurrentFloor}')"
               title="${seat.status}${!isPickable ? ' – not selectable' : ''}"
               style="background:${bg}; border:${border}; color:${color}; opacity:${opacity};
-                     border-radius:10px; height:52px; display:flex; align-items:center;
-                     justify-content:center; cursor:${cursor}; transition:transform .12s, box-shadow .15s, border-color .15s;
-                     font-size:13.5px; font-weight:700; letter-spacing:.02em;
-                     box-shadow:0 1px 2px rgba(0,0,0,.07);"
-              onmouseover="if(${isPickable}) { this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 14px rgba(0,0,0,.18)'; }"
-              onmouseout="this.style.transform='none'; this.style.boxShadow='0 1px 2px rgba(0,0,0,.07)';"
+                     border-radius:8px; height:46px; display:flex; align-items:center;
+                     justify-content:center; cursor:${cursor}; transition:box-shadow 0.15s, border-color 0.15s;
+                     font-size:13px; font-weight:600;"
+              onmouseover="if(${isPickable}) { this.style.boxShadow='0 0 0 2px currentColor'; }"
+              onmouseout="this.style.boxShadow='none';"
             >
               ${isSelected ? "✓ " : ""}${seat.seatNumber}
             </div>
@@ -262,26 +431,20 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       }
 
       let html = "";
-      // Room shell matches the admin map: same padding/gaps/alignment so seat
-      // rows line up. All tiles are a fixed 52px (see SEAT_TILE_H) and every
-      // column uses align-items:flex-start — the missing alignment + mixed
-      // 46/52px heights were what pushed some columns upward.
-      const roomInner = (cols) => `
-        <div style="display:flex; gap:0.75rem; justify-content:center; align-items:flex-start; width:100%; max-width:760px; margin:0 auto;">
-          ${cols}
-        </div>`;
       if (signupCurrentFloor === "First Floor") {
         html = `
-          <div style="background:var(--bg-card); padding: 3rem 1.5rem 4rem 1.5rem; border-radius: 12px; position: relative; border:1px solid var(--border); margin-bottom: 1rem; overflow-x: auto;">
+          <div style="background:var(--bg-card); padding: 2rem 1rem 4rem 1rem; border-radius: 12px; position: relative; border:1px solid var(--border); margin-bottom: 1rem; overflow-x: auto;">
             <!-- Door -->
             <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); background:var(--bg-hover); border:1px solid var(--border); border-top: none; padding: 0.25rem 1.5rem; border-radius: 0 0 8px 8px; font-weight: 700; color:var(--text-secondary); letter-spacing: 1px; font-size: 11px;">
               DOOR
             </div>
             
-            ${roomInner(`${renderSignupCustomColHtml(firstCol1)}
+            <div style="display: flex; gap: 0.75rem; justify-content: center; min-width: max-content; width: 100%;">
+              ${renderSignupCustomColHtml(firstCol1)}
               ${renderSignupCustomColHtml(firstCol2)}
               ${renderSignupCustomColHtml(firstCol3)}
-              ${renderSignupCustomColHtml(firstCol4)}`)}
+              ${renderSignupCustomColHtml(firstCol4)}
+            </div>
 
             <!-- Toilets -->
             <div style="position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; pointer-events: none;">
@@ -296,16 +459,18 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
         `;
       } else if (signupCurrentFloor === "Ground Floor") {
         html = `
-          <div style="background:var(--bg-card); padding: 3rem 1.5rem 4rem 1.5rem; border-radius: 12px; position: relative; border:1px solid var(--border); overflow-x: auto;">
+          <div style="background:var(--bg-card); padding: 2rem 1rem 4rem 1rem; border-radius: 12px; position: relative; border:1px solid var(--border); overflow-x: auto;">
             <!-- Door -->
             <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); background:var(--bg-hover); border:1px solid var(--border); border-top: none; padding: 0.25rem 1.5rem; border-radius: 0 0 8px 8px; font-weight: 700; color:var(--text-secondary); letter-spacing: 1px; font-size: 11px;">
               DOOR
             </div>
             
-            ${roomInner(`${renderSignupCustomColHtml(groundCol1)}
+            <div style="display: flex; gap: 0.75rem; justify-content: center; min-width: max-content; width: 100%; align-items: flex-start;">
+              ${renderSignupCustomColHtml(groundCol1)}
               ${renderSignupCustomColHtml(groundCol2)}
               ${renderSignupCustomColHtml(groundCol3)}
-              ${renderSignupCustomColHtml(groundCol4)}`)}
+              ${renderSignupCustomColHtml(groundCol4)}
+            </div>
 
             <!-- Toilets -->
             <div style="position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; pointer-events: none;">
@@ -329,6 +494,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     };
 
     window._signupSwitchFloor = (floor) => {
+      if (lockFloor) return;
       signupCurrentFloor = floor;
       const gBtn = document.getElementById("signup-tab-ground");
       const fBtn = document.getElementById("signup-tab-first");
@@ -348,26 +514,22 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       if (!isPickable) {
         window.showToast && window.showToast(
         isCheckinContext
-          ? "This seat can't be taken right now. Choose a free seat — green (Available) or amber (Reserved)."
+          ? "This seat can't be taken right now. Choose a free seat — green (Available) or amber (Preferred)."
           : "This seat is not available. Please choose a green (Available) seat.",
         "warning");
         return;
       }
       signupSelectedId = seatId;
       const pickedFloor = floor || signupCurrentFloor || "Ground Floor";
-      // Write into the OPEN dialog's inputs first (check-in and seat-change
-      // modals reuse the same input ids) — document fallback keeps the
-      // non-dialog onboarding flow working.
-      const scope = document.querySelector("dialog[open]") || document;
-      const numInput = (scope.querySelector && scope.querySelector("#selectedSeatNumber")) || document.getElementById("selectedSeatNumber");
-      const idInput = (scope.querySelector && scope.querySelector("#selectedSeatId")) || document.getElementById("selectedSeatId");
-      const floorInput = (scope.querySelector && (scope.querySelector("#selectedSeatFloor") || scope.querySelector("#seatFloor"))) || document.getElementById("selectedSeatFloor") || document.getElementById("seatFloor");
+      const numInput = document.getElementById("selectedSeatNumber");
+      const idInput  = document.getElementById("selectedSeatId");
+      const floorInput = document.getElementById("selectedSeatFloor") || document.getElementById("seatFloor");
       if (numInput) numInput.value = seatNumber;
       if (idInput)  idInput.value  = seatId;
       if (floorInput) floorInput.value = pickedFloor;
       window.selectedSeatFloor = pickedFloor;
-      const label = (scope.querySelector && scope.querySelector("#signup-selected-label")) || document.getElementById("signup-selected-label");
-      if (label) label.innerHTML = `<span style="color:#166534; font-weight:600;">✓ Seat ${seatNumber} (${pickedFloor}) selected</span>`;
+      const label = document.getElementById("signup-selected-label");
+      if (label) label.innerHTML = `<span style="color:#166534; font-weight:600;">✓ Seat ${seatNumber} selected (${pickedFloor})</span>`;
       renderSignupSeats();
     };
 
@@ -439,9 +601,6 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       if (fixed.released) bits.push(`${fixed.released} ghost seat${fixed.released > 1 ? "s" : ""} freed`);
       if (fixed.claimed) bits.push(`${fixed.claimed} seat${fixed.claimed > 1 ? "s" : ""} marked occupied`);
       console.info(`[seats] reconcile: ${bits.join(", ")}.`);
-      if (typeof window.showToast === "function") {
-        window.showToast(`Seat map corrected: ${bits.join(", ")}.`, "info");
-      }
     }
     updateSeatAnalysis(allSeats);
   } catch (e) { console.warn("Seat reconcile skipped:", e); }
@@ -480,23 +639,28 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     
     <div id="seatmap-view-existing">
       <div style="margin-bottom: 1rem;"><p class="page-subtitle" id="seat-subtitle">Loading...</p></div>
+      <div id="seat-conflict-queue"></div>
+      <div id="seat-req-queue"></div>
       <style>
         #seatmap-view-existing .legend-pill { padding:4px 12px; border-radius:999px; font-size:13px; font-weight:500; display:inline-flex; align-items:center; gap:6px; border:1px solid transparent; }
         #seatmap-view-existing .legend-av { background:#f0fdf4; color:#166534; border-color:#bbf7d0; }
         #seatmap-view-existing .legend-oc { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
         #seatmap-view-existing .legend-rs { background:#fffbeb; color:#92400e; border-color:#fde68a; }
         #seatmap-view-existing .legend-mt { background:#eff6ff; color:#1e40af; border-color:#bfdbfe; }
+        #seatmap-view-existing .legend-cf { background:#fef3c7; color:#b45309; border-color:#fde68a; }
         body:not(.light-mode) #seatmap-view-existing .legend-av { background:rgba(34,197,94,0.14); color:#4ade80; border-color:rgba(34,197,94,0.45); }
         body:not(.light-mode) #seatmap-view-existing .legend-oc { background:rgba(239,68,68,0.14); color:#f87171; border-color:rgba(239,68,68,0.45); }
         body:not(.light-mode) #seatmap-view-existing .legend-rs { background:rgba(245,158,11,0.16); color:#fbbf24; border-color:rgba(245,158,11,0.45); }
         body:not(.light-mode) #seatmap-view-existing .legend-mt { background:rgba(59,130,246,0.16); color:#60a5fa; border-color:rgba(59,130,246,0.5); }
+        body:not(.light-mode) #seatmap-view-existing .legend-cf { background:rgba(245,158,11,0.22); color:#fcd34d; border-color:rgba(245,158,11,0.85); }
       </style>
       <!-- Seat Legend -->
-      <div class="seat-legend" style="display:flex; gap:1rem; margin-bottom:1.5rem;">
-        <span class="legend-pill legend-av"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.available">Available</span></span>
-        <span class="legend-pill legend-oc"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.occupied">Occupied</span></span>
-        <span class="legend-pill legend-rs"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.reserved">Reserved</span></span>
-        <span class="legend-pill legend-mt"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.maintenance">Maintenance</span></span>
+      <div class="seat-legend" style="display:flex; gap:0.75rem; margin-bottom:1.5rem; flex-wrap:wrap; align-items:center;">
+        <span class="legend-pill legend-av"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.available">Available</span> <strong id="legend-count-available" style="font-weight:700; margin-left:2px;">(0)</strong></span>
+        <span class="legend-pill legend-oc"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.occupied">Occupied</span> <strong id="legend-count-occupied" style="font-weight:700; margin-left:2px;">(0)</strong></span>
+        <span class="legend-pill legend-rs"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.reserved">Chosen</span> <strong id="legend-count-reserved" style="font-weight:700; margin-left:2px;">(0)</strong></span>
+        <span class="legend-pill legend-mt"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span data-i18n="status.maintenance">Under Maintenance</span> <strong id="legend-count-maintenance" style="font-weight:700; margin-left:2px;">(0)</strong></span>
+        <span class="legend-pill legend-cf"><span style="width:8px; height:8px; border-radius:50%; background:currentColor;"></span><span>Conflict</span> <strong id="legend-count-conflict" style="font-weight:700; margin-left:2px;">(0)</strong></span>
       </div>
 
       <!-- Filters: name/seat search + status only -->
@@ -507,9 +671,10 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
           style="padding:8px 14px; border:1px solid var(--border); border-radius:999px; background:var(--bg-card); color:var(--text-primary); font-size:13px; cursor:pointer;">
           <option value="All">All statuses</option>
           <option value="Available">Available</option>
-          <option value="Reserved">Reserved</option>
+          <option value="Reserved">Chosen (Preferred)</option>
           <option value="Occupied">Occupied</option>
-          <option value="Maintenance">Maintenance</option>
+          <option value="Conflict">Conflict</option>
+          <option value="Maintenance">Under Maintenance</option>
           <option value="Inactive">Inactive</option>
         </select>
         <button id="seat-filter-clear" style="padding:8px 16px; border:1px solid var(--border); border-radius:999px; background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer;">Clear</button>
@@ -525,7 +690,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       <!-- Main Floor Card -->
       <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:12px; padding:1.5rem; margin-bottom:2rem;">
         <h3 style="font-size:15px; font-weight:600; color:var(--text-primary); margin-bottom:4px;" id="current-floor-title" data-i18n="floor.ground">Ground Floor</h3>
-        <p style="font-size:13px; color:var(--text-muted); margin-bottom:1.5rem;">Section A · Section B · click a seat to manage it</p>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:1.5rem;">Plain seat numbers · click a seat to manage it</p>
         
         <div id="seat-grid">
           <div style="text-align:center; padding:2rem; color:var(--text-muted);">Loading live seat map...</div>
@@ -618,6 +783,39 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     const res = await deleteSeatById(seatId);
     if (res.success) window.showToast(`Seat ${seatNumber} deleted.`, "success");
     else window.showToast(`Error: ${res.error}`, "error");
+  };
+
+  window.autoResolveSeatConflict = async (seatId) => {
+    const seat = allSeats.find(s => s.id === seatId);
+    if (!seat) return;
+    const floor = seat.floor || currentFilters.floor || "Ground Floor";
+    const altSeat = await autoFindAlternativeSeat(floor);
+    if (!altSeat) {
+      window.showToast && window.showToast(`No available alternative seat found on ${floor}. Manual staff intervention required.`, "error");
+      return;
+    }
+    const guestName = seat.conflict?.rotationalStudentName || seat.currentOccupantName || "Rotational Guest";
+    const ownerName = seat.conflict?.fixedStudentName || seat.assignedStudentName || "Fixed Owner";
+    const ok = window.confirm(`Auto-reassign ${guestName} from Seat ${seat.seatNumber} to Seat ${altSeat.seatNumber} on ${floor}?\n\nThis will transfer the guest's check-in session and grant Seat ${seat.seatNumber} to ${ownerName}.`);
+    if (!ok) return;
+
+    const res = await reassignRotationalOccupant(seat.id, altSeat.id);
+    if (res.success) {
+      window.showToast && window.showToast(res.message || `Reassigned ${guestName} to Seat ${altSeat.seatNumber}!`, "success");
+    } else {
+      window.showToast && window.showToast(`Reassignment failed: ${res.error}`, "error");
+    }
+  };
+
+  window.dismissSeatConflict = async (seatId) => {
+    const ok = window.confirm("Dismiss this arrival conflict alert?");
+    if (!ok) return;
+    const res = await resolveSeatConflict(seatId);
+    if (res.success) {
+      window.showToast && window.showToast("Conflict dismissed.", "info");
+    } else {
+      window.showToast && window.showToast(`Failed: ${res.error}`, "error");
+    }
   };
 
   // HTML5 drag & drop: drop onto an empty cell moves, onto a seat swaps.
@@ -724,7 +922,7 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     if (!seat) return;
     currentSelectedSeat = seat;
 
-    modalTitle.innerText = `Seat ${seat.seatNumber} (${seat.status})`;
+    modalTitle.innerText = `Seat ${seat.seatNumber} (${seat.floor || currentFilters.floor || 'Ground Floor'}) — ${seat.status}`;
     optionsDiv.innerHTML = "";
     optionsDiv.style.display = "flex";
     assignForm.style.display = "none";
@@ -754,8 +952,26 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       await processSeatAction(seat, choice);
     };
 
+    if (seat.status === "Conflict" || seat.conflict) {
+      optionsDiv.appendChild(createBtn("⚡ Auto-Reassign Guest & Seat Fixed Owner", () => {
+        seatModal.style.display = "none";
+        window.autoResolveSeatConflict(seat.id);
+      }));
+      optionsDiv.appendChild(createBtn("Dismiss Conflict Alert", () => {
+        seatModal.style.display = "none";
+        window.dismissSeatConflict(seat.id);
+      }));
+    }
+
+    if (seat.currentOccupantId && seat.occupantType === "rotational") {
+      optionsDiv.appendChild(createBtn("🔄 Reassign Guest to Alternative Seat", () => {
+        seatModal.style.display = "none";
+        window.autoResolveSeatConflict(seat.id);
+      }));
+    }
+
     if (seat.status === "Available") {
-      optionsDiv.appendChild(createBtn("Assign Student", () => {
+      optionsDiv.appendChild(createBtn("Assign Student (Fixed Plan)", () => {
         optionsDiv.style.display = "none";
         assignForm.style.display = "flex";
         assignInput.focus();
@@ -770,10 +986,42 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
       optionsDiv.appendChild(createBtn("Mark Available", () => handleAction("1")));
     } else if (seat.status === "Occupied") {
       const p = document.createElement("p");
-      p.innerText = "Occupied seats cannot be modified directly until the student checks out.";
+      p.innerText = seat.occupantType === "rotational"
+        ? "Rotational guest is currently occupying this chair. Use 'Reassign Guest' above to move them."
+        : "Occupied by fixed-seat owner. Cannot be modified directly until checkout.";
       p.style.fontSize = "13px";
       p.style.color = "var(--text-secondary)";
       optionsDiv.appendChild(p);
+    }
+
+    // Rotational Eligibility Configuration (Requirement 7)
+    const eligCard = document.createElement("div");
+    eligCard.style.cssText = "margin-top:1rem; padding-top:0.85rem; border-top:1px solid var(--border);";
+    eligCard.innerHTML = `
+      <div style="font-size:12px; font-weight:700; color:var(--text-secondary); margin-bottom:6px;">ROTATIONAL ELIGIBILITY (24/7 SCHEDULES)</div>
+      <div style="display:flex; gap:6px;">
+        <select id="seat-modal-rot-elig" style="flex:1; padding:7px 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-card); color:var(--text-primary); font-size:13px;">
+          <option value="both" ${(seat.rotationalEligibility || 'both') === 'both' ? 'selected' : ''}>Day & Night</option>
+          <option value="day" ${seat.rotationalEligibility === 'day' ? 'selected' : ''}>Day Only</option>
+          <option value="night" ${seat.rotationalEligibility === 'night' ? 'selected' : ''}>Night Only</option>
+          <option value="none" ${seat.rotationalEligibility === 'none' ? 'selected' : ''}>Fixed Only (No Rotational)</option>
+        </select>
+        <button id="btn-save-rot-elig" class="btn btn-primary btn-sm" style="padding:7px 14px; font-size:12px; border-radius:8px;">Save</button>
+      </div>
+    `;
+    optionsDiv.appendChild(eligCard);
+    const saveBtn = eligCard.querySelector("#btn-save-rot-elig");
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        const val = eligCard.querySelector("#seat-modal-rot-elig")?.value || "both";
+        const res = await setSeatRotationalEligibility(seat.id, val);
+        if (res.success) {
+          window.showToast && window.showToast(`Seat ${seat.seatNumber} rotational eligibility set to: ${val}`, "success");
+          seatModal.style.display = "none";
+        } else {
+          window.showToast && window.showToast("Failed to update eligibility: " + res.error, "error");
+        }
+      };
     }
 
     seatModal.style.display = "flex";
@@ -786,6 +1034,21 @@ export const initSeatMapUI = async (mode, containerId, opts = {}) => {
     updateSeatAnalysis(allSeats);
     renderSeatMap();
   });
+
+  // Seat-change requests filed from the student portal (fixed-seat plans).
+  // Approve/Reject run here so staff never leave the Seats page.
+  if (window.__seatReqUnsub) { try { window.__seatReqUnsub(); } catch (_) {} }
+  window.__seatReqUnsub = null;
+  import("./seatRequestService.js").then(({ listenToPendingSeatRequests, wireSeatRequestActions }) => {
+    try {
+      wireSeatRequestActions();
+      window.__seatReqUnsub = listenToPendingSeatRequests((records) => {
+        window.__pendingSeatRequests = records;
+        renderSeatReqQueue(records);
+        if (typeof window.__refreshNotifBadges === "function") window.__refreshNotifBadges();
+      });
+    } catch (e) { console.warn("[seats] seat-request listener failed:", e); }
+  }).catch(() => {});
 
   // Re-paint seat colors when night/day theme toggles
   if (window.__seatThemeObserver) window.__seatThemeObserver.disconnect();
@@ -844,33 +1107,127 @@ const triggerAssignSeat = async (seat, studentEmailOrId) => {
     const studentData = { id: studentDoc.id, ...studentDoc.data() };
     
     if (studentData.status !== "Active") return window.showToast("Cannot assign seat to inactive student.", "warning");
-    if (studentData.seatNumber) return window.showToast(`Student already has a seat assigned: ${studentData.seatNumber}`, "warning");
+    if (studentData.seatNumber) return window.showToast(`Student already has a seat assigned: Seat ${studentData.seatNumber} (${studentData.seatFloor || 'Ground Floor'})`, "warning");
 
     const res = await assignSeat(seat.id, studentData);
     if (!res.success) window.showToast("Failed to assign seat: " + res.error, "error");
-    else window.showToast(`Successfully assigned ${studentData.name} to ${seat.seatNumber}`, "success");
+    else window.showToast(`Successfully assigned ${studentData.name} to Seat ${seat.seatNumber} (${seat.floor || currentFilters.floor || 'Ground Floor'})`, "success");
 
   } catch (err) {
     window.showToast("Error finding student: " + err.message, "error");
   }
 };
 
+const escSeatReq = (v) => String(v == null ? "" : v)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Fixed-seat arrival conflicts requiring staff resolution */
+const renderSeatConflictQueue = (seats) => {
+  const box = document.getElementById("seat-conflict-queue");
+  if (!box) return;
+  const conflicts = (seats || []).filter(s => s.status === "Conflict" || s.conflict);
+  if (!conflicts.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `
+    <div class="card" style="border:2px solid #f59e0b; border-radius:12px; padding:1rem 1.25rem; margin-bottom:1.5rem; background:rgba(245,158,11,.08);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.6rem;">
+        <div style="font-size:12px; font-weight:800; letter-spacing:.05em; color:#d97706; display:flex; align-items:center; gap:6px;">
+          <span>⚠️</span> FIXED-OWNER ARRIVAL CONFLICTS · ${conflicts.length} WAITING RESOLUTION
+        </div>
+        <span style="font-size:12px; color:var(--text-muted);">Guest currently occupying absent fixed-owner's chair</span>
+      </div>
+      ${conflicts.map((c) => {
+        const guestName = c.conflict?.rotationalStudentName || c.currentOccupantName || "Rotational Guest";
+        const ownerName = c.conflict?.fixedStudentName || c.assignedStudentName || "Fixed Owner";
+        const code = formatSeatCode(c.seatNumber, c.floor || "Ground Floor");
+        return `
+        <div style="display:flex; flex-wrap:wrap; gap:.5rem .9rem; align-items:center; padding:.6rem 0; border-top:1px solid rgba(245,158,11,.25); font-size:13px;">
+          <div style="flex:1 1 240px; min-width:0;">
+            <strong>Seat ${code} (${c.floor || 'Ground Floor'})</strong>:
+            Fixed owner <strong>${ownerName}</strong> arrived, but guest <strong>${guestName}</strong> is sitting.
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="window.autoResolveSeatConflict('${c.id}')" style="background:#d97706; border-color:#d97706;">⚡ Auto Reassign Guest</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.manageSeat('${c.id}')">Manage</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.dismissSeatConflict('${c.id}')">Dismiss</button>
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+};
+
+/** Pending student seat-change requests, decided inline on the Seats page. */
+const renderSeatReqQueue = (records) => {
+  const box = document.getElementById("seat-req-queue");
+  if (!box) return;
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `
+    <div class="card" style="border:1px solid rgba(245,158,11,.45); border-radius:12px; padding:1rem 1.25rem; margin-bottom:1.5rem; background:rgba(245,158,11,.06);">
+      <div style="font-size:12px; font-weight:800; letter-spacing:.05em; color:var(--text-secondary); margin-bottom:.6rem;">
+        SEAT CHANGE REQUESTS · ${list.length} WAITING
+      </div>
+      ${list.map((r) => `
+        <div style="display:flex; flex-wrap:wrap; gap:.5rem .9rem; align-items:center; padding:.55rem 0; border-top:1px solid var(--border); font-size:13px;">
+          <div style="flex:1 1 220px; min-width:0;">
+            <strong>${escSeatReq(r.studentName || "Student")}</strong>
+            <span style="color:var(--text-muted);"> wants </span>
+            <strong>${escSeatReq(r.toSeat || "?")}</strong>
+            <span style="color:var(--text-muted);"> (${escSeatReq(r.toFloor || "")}, now ${escSeatReq(r.fromSeat || "?")})</span>
+            ${r.reason ? `<div style="color:var(--text-muted); font-size:12px;">“${escSeatReq(r.reason)}”</div>` : ""}
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="window.approveSeatChange('${r.id}')">Approve</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.rejectSeatChange('${r.id}')">Reject</button>
+        </div>`).join("")}
+    </div>`;
+};
+
 const updateSeatAnalysis = (seats) => {
-  // Scoped to the floor actually on screen — the old global count is what
-  // made "1 occupied" show while the visible map looked all-clean
-  // (the occupied seat was on the other floor, or dimmed by a filter).
   const floor = (currentFilters && currentFilters.floor) || "Ground Floor";
   const onFloor = seats.filter(s => (s.floor || "Ground Floor") === floor);
+  const total = onFloor.length;
   const occupied = onFloor.filter(s => s.status === "Occupied").length;
   const available = onFloor.filter(s => s.status === "Available").length;
+  const reserved = onFloor.filter(s => s.status === "Reserved").length;
+  const maintenance = onFloor.filter(s => s.status === "Maintenance").length;
+  const pending = onFloor.filter(s => s.status === "Pending").length;
+  const inactive = onFloor.filter(s => s.status === "Inactive").length;
+  const conflict = onFloor.filter(s => s.status === "Conflict" || s.conflict).length;
+
+  // Update live counts on legend badges
+  const avEl = document.getElementById("legend-count-available");
+  if (avEl) avEl.textContent = `(${available})`;
+  const ocEl = document.getElementById("legend-count-occupied");
+  if (ocEl) ocEl.textContent = `(${occupied})`;
+  const rsEl = document.getElementById("legend-count-reserved");
+  if (rsEl) rsEl.textContent = `(${reserved})`;
+  const mtEl = document.getElementById("legend-count-maintenance");
+  if (mtEl) mtEl.textContent = `(${maintenance})`;
+  const cfEl = document.getElementById("legend-count-conflict");
+  if (cfEl) cfEl.textContent = `(${conflict})`;
+
+  renderSeatConflictQueue(seats);
+
   const occupiedOther = seats.filter(s => s.status === "Occupied" && (s.floor || "Ground Floor") !== floor);
+  const reservedOther = seats.filter(s => s.status === "Reserved" && (s.floor || "Ground Floor") !== floor);
+
   const subtitle = document.getElementById("seat-subtitle");
   if (subtitle) {
-    let text = `${occupied} occupied · ${available} available on ${floor}`;
-    if (occupiedOther.length > 0) {
-      const names = occupiedOther.slice(0, 3).map(s => s.seatNumber).join(", ");
-      const more = occupiedOther.length > 3 ? ` +${occupiedOther.length - 3} more` : "";
-      text += ` · ${occupiedOther.length} occupied elsewhere (${names}${more}) — switch floor to see`;
+    const parts = [
+      `${occupied} occupied`,
+      `${available} available`,
+      `${reserved} chosen`,
+      `${maintenance} under maintenance`
+    ];
+    if (conflict > 0) parts.unshift(`⚠️ ${conflict} arrival conflict${conflict > 1 ? 's' : ''}`);
+    if (pending > 0) parts.push(`${pending} pending`);
+    if (inactive > 0) parts.push(`${inactive} inactive`);
+
+    let text = `${parts.join(" · ")} · ${total} total on ${floor}`;
+    if (occupiedOther.length > 0 || reservedOther.length > 0) {
+      const otherDetails = [];
+      if (occupiedOther.length > 0) otherDetails.push(`${occupiedOther.length} occupied`);
+      if (reservedOther.length > 0) otherDetails.push(`${reservedOther.length} chosen`);
+      text += ` · ${otherDetails.join(", ")} on other floor (switch floor to see)`;
     }
     // A status/search filter dims non-matching seats to near-invisible —
     // say so, or the scoped count looks wrong against a "clean" map.
@@ -894,13 +1251,20 @@ const updateSeatAnalysis = (seats) => {
     const grid = document.getElementById("seat-grid");
     if (!grid) return;
 
+    const normalizeFloor = (value) => {
+      const raw = String(value == null ? "" : value).trim().toLowerCase();
+      if (raw.includes("first") || raw.includes("1st") || raw === "1" || raw.startsWith("b") || raw.includes("prem")) {
+        return "First Floor";
+      }
+      return "Ground Floor";
+    };
+
     let filtered = allSeats.filter(seat => {
-      const seatFloor = seat.floor || "Ground Floor";
-      return seatFloor === currentFilters.floor;
+      return normalizeFloor(seat.floor) === currentFilters.floor;
     });
 
-    // Spec layout names (plain numbers now) — also used to infer positions for
-    // backend docs that predate col/row, and to know structural gaps (nulls).
+    // Spec layout names — also used to infer positions for backend docs that
+    // predate col/row, and to know structural gaps (nulls). Plain numbers now.
     const groundCol1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map(n => String(n));
     const groundCol2 = [null, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 67, 23, 22, 21, 20, 19].map(n => n ? String(n) : null);
     const groundCol3 = [null, 35, 36, null, 37, 38, 39, 40, 41, 42, null, 43, 68, 44, 45, 46, 47, 48].map(n => n ? String(n) : null);
@@ -961,11 +1325,25 @@ const updateSeatAnalysis = (seats) => {
       const dropAttrs = layoutEditMode
         ? `ondragover="window._seatDragOver(event)" ondrop="window._seatDropOnCell(event, ${Number(seat.col)}, ${Number(seat.row)})"`
         : "";
+      const isConflict = seat.status === "Conflict" || !!seat.conflict;
+      const isRotGuest = seat.occupantType === "rotational";
+      const elig = seat.rotationalEligibility;
+      const eligTag = (elig && elig !== "both")
+        ? `<span style="position:absolute; top:2px; left:4px; font-size:8px; opacity:0.85; font-weight:700; color:var(--text-muted);">${elig === 'day' ? 'DAY' : (elig === 'night' ? 'NIGHT' : 'FIX')}</span>`
+        : "";
+      const guestBadge = isRotGuest
+        ? `<span style="position:absolute; bottom:2px; font-size:9px; background:rgba(99,102,241,0.2); color:var(--text-secondary); padding:0 4px; border-radius:3px; z-index:1;">Guest</span>`
+        : "";
+      const conflictBadge = isConflict
+        ? `<span style="position:absolute; top:-7px; left:-5px; background:#ef4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; padding:1px 5px; box-shadow:0 2px 4px rgba(0,0,0,0.25); z-index:2;">CONFLICT</span>`
+        : "";
+
       return `
         <div
           class="seat-card"
           ${dragAttrs} ${dropAttrs}
           onclick="window.handleSeatClick('${seat.id}')"
+          onmouseenter="window.__seatHoverShow('${seat.id}', this)" onmouseleave="window.__seatHoverHide()"
           style="
             position:relative;
             background: ${__pal.bg}; border: ${__pal.border}; color: ${__pal.color};
@@ -976,10 +1354,12 @@ const updateSeatAnalysis = (seats) => {
           "
           onmouseover="this.style.boxShadow='0 0 0 2px currentColor';"
           onmouseout="this.style.boxShadow='none';"
-          title="${seat.seatNumber} · ${seat.status}${seat.assignedStudentName ? ' · ' + seat.assignedStudentName : ''}${layoutEditMode ? ' · drag to move' : ''}"
         >
           ${editBtns}
-          <div style="font-size: 14px; font-weight: 600;">${seat.seatNumber}</div>
+          ${eligTag}
+          ${conflictBadge}
+          <div style="font-size: 14px; font-weight: 600;">${formatSeatCode(seat.seatNumber, seat.floor || currentFilters.floor, seat.planType || seat.type)}</div>
+          ${guestBadge}
         </div>
       `;
     };

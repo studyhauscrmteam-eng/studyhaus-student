@@ -79,10 +79,18 @@ const resolveUserRole = async (user) => {
       );
     }
 
-    // Account-level lockout ONLY. `Old` / `Inactive` / `Rejected` are
-    // membership states the portal renders deliberately — they must not
-    // block a signed-in member from seeing their own portal.
-    if (userDoc.status === "disabled") {
+    // Old Students / Disabled / Inactive: portal access is strictly disabled.
+    // Credentials are NOT deleted; access to the student portal is blocked.
+    const isOldStudent = userDoc.status === "Old" || userDoc.status === "Old Student" || userDoc.portalAccessDisabled === true;
+    if (isOldStudent) {
+      try { await authLogout(); } catch (_) { }
+      try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); localStorage.removeItem("userName"); } catch (_) { }
+      throw new Error("Your student portal access has been disabled because you are registered as an Old Student. Please contact library administration to reactivate your account.");
+    }
+
+    if (userDoc.status === "disabled" || userDoc.status === "Inactive") {
+      try { await authLogout(); } catch (_) { }
+      try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); localStorage.removeItem("userName"); } catch (_) { }
       throw new Error("This account has been disabled. Please contact administration.");
     }
 
@@ -90,7 +98,7 @@ const resolveUserRole = async (user) => {
     // Revoked users are signed out and refused here. No writes.
     if (userDoc.loginRevoked === true) {
       try { await authLogout(); } catch (_) { }
-      try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); } catch (_) { }
+      try { localStorage.removeItem("userRole"); localStorage.removeItem("userId"); localStorage.removeItem("userName"); } catch (_) { }
       throw new Error("This login has been revoked by the administrator. Please contact the office.");
     }
 

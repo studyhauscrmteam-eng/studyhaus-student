@@ -41,7 +41,7 @@ const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, " ").replace(
 
 const layout = (title, lines, footerNote = "") => `
   <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
-    <div style="background:#059669;color:#fff;padding:16px 20px;font-size:18px;font-weight:bold;">Studyhaus · ${escapeHtml(title)}</div>
+    <div style="background:#983132;color:#fff;padding:16px 20px;font-size:18px;font-weight:bold;">Shreeji Library · ${escapeHtml(title)}</div>
     <div style="padding:20px;color:#0f172a;font-size:14px;line-height:1.6;">
       ${lines.map((l) => `<p style="margin:0 0 10px;">${l}</p>`).join("")}
       ${footerNote ? `<p style="margin-top:16px;color:#64748b;font-size:12px;">${footerNote}</p>` : ""}
@@ -52,7 +52,7 @@ export const sendAdmissionReceivedMail = (student) => {
   if (!student?.email) return Promise.resolve({ success: false, error: "No student email." });
   return queueEmail({
     to: student.email,
-    subject: `Admission request received — ${student.name || "Studyhaus"}`,
+    subject: `Admission request received — ${student.name || "Shreeji Library"}`,
     html: layout("Admission request received", [
       `Hi <b>${escapeHtml(student.name || "Student")}</b>,`,
       `Your admission request for <b>${escapeHtml(student.planName || "your plan")}</b> has been received and is <b>pending admin approval</b>.`,
@@ -67,7 +67,7 @@ export const sendAdmissionApprovedMail = (student) => {
   if (!student?.email) return Promise.resolve({ success: false, error: "No student email." });
   return queueEmail({
     to: student.email,
-    subject: `Admission approved — welcome to Studyhaus, ${student.name || ""}!`,
+    subject: `Admission approved — welcome to Shreeji Library, ${student.name || ""}!`,
     html: layout("Admission approved", [
       `Hi <b>${escapeHtml(student.name || "Student")}</b>,`,
       `Good news! Your admission has been <b style="color:#059669;">approved</b>.`,
@@ -84,7 +84,7 @@ export const sendAdmissionRejectedMail = (student, reason = "") => {
   if (!student?.email) return Promise.resolve({ success: false, error: "No student email." });
   return queueEmail({
     to: student.email,
-    subject: `Update on your Studyhaus admission request`,
+    subject: `Update on your Shreeji Library admission request`,
     html: layout("Admission update", [
       `Hi <b>${escapeHtml(student.name || "Student")}</b>,`,
       `Your admission request was <b style="color:#b91c1c;">not approved</b> at this time.`,
