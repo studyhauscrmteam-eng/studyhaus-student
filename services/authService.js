@@ -136,7 +136,15 @@ export const loginWithPhone = async (identifier, password) => {
 
     // If standard auth failed, check uniqueness for active provisioned Auth account (supports both phone and email logins)
     if (isAuthFail) {
-      let createdAnon = false;
+      const cleanupAnon = async () => {
+        if (createdAnon && auth.currentUser?.isAnonymous) {
+          try {
+            await auth.currentUser.delete();
+          } catch (_) {
+            await signOut(auth).catch(() => {});
+          }
+        }
+      };
       try {
         const { signInAnonymously } = await import("firebase/auth");
         if (!auth.currentUser) {
@@ -148,27 +156,21 @@ export const loginWithPhone = async (identifier, password) => {
         if (claimSnap.exists()) {
           const claimData = claimSnap.data() || {};
           if (claimData.authEmail && claimData.authEmail.toLowerCase() !== authEmail.toLowerCase()) {
+            await cleanupAnon();
             try {
               return await login(claimData.authEmail, password);
             } catch (aliasErr) {
-              if (createdAnon && auth.currentUser?.isAnonymous) {
-                await signOut(auth).catch(() => {});
-              }
               throw aliasErr;
             }
           }
         }
       } catch (checkErr) {
-        if (createdAnon && auth.currentUser?.isAnonymous) {
-          await signOut(auth).catch(() => {});
-        }
+        await cleanupAnon();
         if (checkErr?.code === "auth/invalid-credential" || checkErr?.code === "auth/wrong-password") {
           throw checkErr;
         }
       }
-      if (createdAnon && auth.currentUser?.isAnonymous) {
-        await signOut(auth).catch(() => {});
-      }
+      await cleanupAnon();
     }
 
     // Firebase email matching can be case-sensitive. Accounts created from

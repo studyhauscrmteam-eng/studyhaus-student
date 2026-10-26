@@ -66,7 +66,9 @@ window.downloadStudentInvoice = async (id, planName, amount, date, mode, period,
     if (window.showToast) window.showToast("Generating e-invoice PDF...", "info");
     const cleanId = id ? String(id).replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase() : Date.now().toString().slice(-8);
     const authEmail = auth?.currentUser?.email;
-    const realEmail = live.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || live.authEmail || "";
+    const cleanLiveEmail = (live.email && !live.email.endsWith("@student.shreejilibrary.com")) ? live.email : "";
+    const cleanAuthEmail = (authEmail && !authEmail.endsWith("@student.shreejilibrary.com")) ? authEmail : "";
+    const realEmail = cleanLiveEmail || (live.personalEmail && !live.personalEmail.endsWith("@student.shreejilibrary.com") ? live.personalEmail : "") || cleanAuthEmail || "";
     const res = await generateInvoicePDF({
       invoiceNo: `INV-${cleanId}`,
       date: date || new Date().toLocaleDateString('en-GB'),
@@ -921,8 +923,40 @@ const syncStudentChrome = (s, photoUrl, notifCount) => {
         : `Student Portal`;
     }
 
-    const name = s.name || "Student";
-    const initials = name.substring(0, 2).toUpperCase();
+    const cached = localStorage.getItem("userName") || "";
+    const validCached = (cached && !/^\d{10}$/.test(cached.trim()) && !cached.includes("@student.shreejilibrary.com")) ? cached.trim() : "";
+    const rawDocName = (s && (s.name || s.fullName || s.studentName)) ? String(s.name || s.fullName || s.studentName).trim() : "";
+    const cleanDocName = (rawDocName && !/^\d{10}$/.test(rawDocName) && !rawDocName.includes("@student.shreejilibrary.com")) ? rawDocName : "";
+    const authDisplayName = auth?.currentUser?.displayName || "";
+    const cleanAuthName = (authDisplayName && !/^\d{10}$/.test(authDisplayName.trim())) ? authDisplayName.trim() : "";
+    const name = cleanDocName || validCached || cleanAuthName || "Student";
+
+    // Auto-repair Firestore student doc if name or email was left empty
+    if (!cleanDocName && (validCached || cleanAuthName) && s && s.id) {
+      s.name = name;
+      try {
+        updateDoc(doc(db, "students", s.id), { name, updatedAt: serverTimestamp() }).catch(() => {});
+      } catch (_) {}
+    }
+    const cleanDocEmail = (s && s.email && !s.email.endsWith("@student.shreejilibrary.com")) ? s.email.trim() : "";
+    const cleanPersonalEmail = (s && s.personalEmail && !s.personalEmail.endsWith("@student.shreejilibrary.com")) ? s.personalEmail.trim() : "";
+    const cachedEmail = localStorage.getItem("userEmail") || localStorage.getItem("studentEmail") || "";
+    const validCachedEmail = (cachedEmail && !cachedEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cachedEmail.trim())) ? cachedEmail.trim().toLowerCase() : "";
+    const rawAuthEmail = (auth?.currentUser?.email || "").toLowerCase();
+    const cleanAuthEmail = (rawAuthEmail && !rawAuthEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawAuthEmail)) ? rawAuthEmail : "";
+    const resolvedEmail = cleanDocEmail || cleanPersonalEmail || validCachedEmail || cleanAuthEmail || "";
+
+    if (!cleanDocEmail && resolvedEmail && s && s.id) {
+      s.email = resolvedEmail;
+      try {
+        updateDoc(doc(db, "students", s.id), { email: resolvedEmail, updatedAt: serverTimestamp() }).catch(() => {});
+        localStorage.setItem("userEmail", resolvedEmail);
+      } catch (_) {}
+    }
+
+    const initials = name !== "Student"
+      ? name.split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "S"
+      : "S";
     const avatarInner = photoUrl
       ? `<img src="${photoUrl}" alt="" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:50%;" />`
       : initials;
@@ -1538,7 +1572,12 @@ const renderPortal = () => {
           const rawShot = isValidImg(studentDocProof) ? studentDocProof : "";
           const realAmt = resolveRecordAmount(null, s);
           const stDate = s.startDate || (s.createdAt?.seconds ? new Date(s.createdAt.seconds * 1000).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]);
-          const enDate = s.paymentDueDate || s.endDate || stDate;
+          const isPayLater = s.paymentMethod === "Pay Later";
+          const isCash = s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)";
+          const renMethod = isPayLater ? "Pay Later" : (isCash ? "Cash" : (s.paymentMethod || "UPI"));
+          const renTxn = isPayLater ? (s.transactionId || "PAY LATER") : (isCash ? (s.transactionId || "CASH") : (s.transactionId || "ADMISSION"));
+          const renStatus = isPayLater ? "Pending" : "Completed";
+
           const renDoc = {
             studentId: s.id,
             studentName: s.name || "Student",
@@ -1547,9 +1586,9 @@ const renderPortal = () => {
             startDate: stDate,
             endDate: enDate,
             amount: realAmt,
-            paymentMethod: s.paymentMethod || "UPI",
-            transactionId: s.transactionId || "ADMISSION",
-            status: "Completed",
+            paymentMethod: renMethod,
+            transactionId: renTxn,
+            status: renStatus,
             type: "Initial Admission",
             source: "admission",
             renewedBy: "System",
@@ -1575,14 +1614,24 @@ const renderPortal = () => {
   const hasAdmissionPay = displayPayments.some(p => p.source === "onboarding" || p.source === "admission" || (p.transactionId && s.transactionId && p.transactionId === s.transactionId));
   if (!hasAdmissionPay && (s.paymentMethod || s.transactionId || s.paymentScreenshotUrl || studentDocProof || s.status === "Active" || s.approvalStatus === "Approved")) {
     const realAmt = resolveRecordAmount(null, s);
+    const isPayLaterStudent = s.paymentMethod === "Pay Later";
+    const isCashStudent = s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)";
+    const admMethod = isPayLaterStudent ? "Pay Later" : (isCashStudent ? "Cash" : (s.paymentMethod || "UPI"));
+    const admTxn = isPayLaterStudent
+      ? (s.transactionId || "PAY LATER")
+      : (isCashStudent ? (s.transactionId || "CASH") : (s.transactionId || "Admission"));
+    const admStatus = isPayLaterStudent
+      ? "pending"
+      : ((s.status === "Active" || s.approvalStatus === "Approved") ? "approved" : "pending");
+
     displayPayments.push({
       id: "initial-admission",
       date: s.startDate || s.admissionDate || (s.createdAt?.seconds ? new Date(s.createdAt.seconds * 1000).toISOString() : new Date().toISOString()),
       planName: s.planName || "Membership Admission",
       amount: realAmt,
-      paymentMethod: s.paymentMethod || "UPI",
-      transactionId: s.transactionId || "Admission",
-      status: (s.status === "Active" || s.approvalStatus === "Approved") ? "approved" : "pending",
+      paymentMethod: admMethod,
+      transactionId: admTxn,
+      status: admStatus,
       source: "admission",
       monthLabel: s.planName || "Admission",
       screenshot: studentDocProof,
@@ -1679,13 +1728,18 @@ const renderPortal = () => {
   const hasAdmissionRenewal = displayRenewals.some(r => r.source === "onboarding" || r.source === "admission" || (r.startDate && r.startDate === s.startDate));
   if (!hasAdmissionRenewal && (s.status === "Active" || s.approvalStatus === "Approved") && (s.startDate || s.paymentDueDate)) {
     const realAmt = resolveRecordAmount(null, s);
+    const isPayLater = s.paymentMethod === "Pay Later";
+    const isCash = s.paymentMethod === "Cash" || s.paymentMethod === "Paid (Cash)";
+    const renMethod = isPayLater ? "Pay Later" : (isCash ? "Cash" : (s.paymentMethod || "UPI"));
     displayRenewals.push({
       id: "initial-admission-renewal",
       newPlan: s.planName || "Regular Fixed Premium",
       startDate: s.startDate || "—",
       endDate: s.paymentDueDate || s.endDate || "—",
       amount: realAmt,
-      paymentMethod: s.paymentMethod || "UPI",
+      paymentMethod: renMethod,
+      transactionId: isPayLater ? (s.transactionId || "PAY LATER") : (isCash ? (s.transactionId || "CASH") : (s.transactionId || "ADMISSION")),
+      status: isPayLater ? "Pending" : "Completed",
       screenshot: studentDocProof,
       paymentScreenshotUrl: studentDocProof,
       source: "admission",
@@ -1861,6 +1915,8 @@ const renderPortal = () => {
     : onboardingState;
   if (effectiveState !== STATE.DASHBOARD) {
     window.__onboardingActive = true;
+    const onboardingPhoto = (s && (s.profilePhotoUrl || s.photoUrl || s.photo)) || null;
+    syncStudentChrome(s, onboardingPhoto, 0);
     // Both of these run BEFORE renderOnboarding awaits the plan list: the
     // sidebar becomes an admission step rail (hiding the nav items used to
     // leave a blank slab) and the content area gets a themed skeleton. That is
@@ -2058,7 +2114,9 @@ const renderPortal = () => {
       const live = { ...(currentStudent || s || {}) };
       if (!live.id) live.id = (auth.currentUser ? auth.currentUser.uid : "") || "";
       const authEmail = auth?.currentUser?.email;
-      const displayEmail = live.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || live.authEmail || "";
+      const cleanLiveEmail = (live.email && !live.email.endsWith("@student.shreejilibrary.com")) ? live.email : "";
+      const cleanAuthEmail = (authEmail && !authEmail.endsWith("@student.shreejilibrary.com")) ? authEmail : "";
+      const displayEmail = cleanLiveEmail || (live.personalEmail && !live.personalEmail.endsWith("@student.shreejilibrary.com") ? live.personalEmail : "") || cleanAuthEmail || "";
       document.getElementById("student-profile-edit-modal")?.remove();
       const modal = document.createElement('dialog');
       modal.id = "student-profile-edit-modal";

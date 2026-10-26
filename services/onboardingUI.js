@@ -249,10 +249,23 @@ const cleanDob = (val) => {
 
 const detailsBody = (s) => {
   const t = window.t || ((k, def) => (typeof def === "string" ? def : k));
-  const sName = s.name || s.fullName || s.studentName || "";
+  const cachedName = localStorage.getItem("userName") || "";
+  const validCachedName = (cachedName && !/^\d{10}$/.test(cachedName.trim()) && !cachedName.includes("@student.shreejilibrary.com"))
+    ? cachedName.trim()
+    : "";
+  const rawName = s.name || s.fullName || s.studentName || "";
+  const sName = (rawName && !/^\d{10}$/.test(rawName.trim()) && !rawName.includes("@student.shreejilibrary.com"))
+    ? rawName.trim()
+    : validCachedName;
   const sPhone = s.phone || s.mobile || s.contactNumber || s.loginId || "";
   const sParentPhone = s.parentPhone || s.parentMobile || "";
-  const sEmail = s.email || s.authEmail || "";
+  // Real personal email ONLY — NEVER the internal @student.shreejilibrary.com auth alias!
+  const rawEmail = s.email || s.personalEmail || "";
+  const cachedEmail = localStorage.getItem("userEmail") || localStorage.getItem("studentEmail") || "";
+  const validCachedEmail = (cachedEmail && !cachedEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cachedEmail.trim())) ? cachedEmail.trim().toLowerCase() : "";
+  const sEmail = (rawEmail && !rawEmail.endsWith("@student.shreejilibrary.com"))
+    ? rawEmail
+    : (validCachedEmail || ((s.authEmail && !s.authEmail.endsWith("@student.shreejilibrary.com")) ? s.authEmail : ""));
   const sDob = cleanDob(s.dob);
   const sGender = s.gender || "";
 
@@ -501,7 +514,7 @@ const paymentBody = (s, plan, amount) => `
       </div>
       <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:.65rem;line-height:1.45;">Reserve now, settle at the desk before the due date.</div>
       <div id="onb-later-fields" style="display:none;margin-top:.75rem;">
-        ${field("onb-due", "Pay by (date)", input("onb-due", "date", s.paymentDueDate || defaultDueDate(), "required"), true, false)}
+        ${field("onb-due", "Pay by (date)", input("onb-due", "date", s.paymentDueDate || defaultDueDate(), `required min="${todayDate()}" max="${maxDueDate()}"`), true, false)}
       </div>
     </label>
   </div>
@@ -601,6 +614,16 @@ function defaultDueDate() {
   const d = new Date();
   d.setDate(d.getDate() + 3);
   return d.toISOString().split("T")[0];
+}
+
+function maxDueDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  return d.toISOString().split("T")[0];
+}
+
+function todayDate() {
+  return new Date().toISOString().split("T")[0];
 }
 
 /* ----------------------------------------------------------- terminal bodies */
@@ -1347,6 +1370,21 @@ const runStep = async (state, student, plans, setBusy, onAdvance, documents = {}
         name, phone, dob, gender, college, course, address,
         parentPhone, email, remarks
       });
+      if (name && !/^\d{10}$/.test(name.trim())) {
+        localStorage.setItem("userName", name.trim());
+      }
+      if (email) {
+        localStorage.setItem("userEmail", email.trim().toLowerCase());
+      }
+      const topbarNameEl = document.getElementById("topbar-user-name");
+      const topbarAvatarEl = document.getElementById("topbar-user-avatar");
+      const currentNameEl = document.getElementById("current-user-name");
+      const currentAvatarEl = document.getElementById("current-user-avatar");
+      if (topbarNameEl) topbarNameEl.textContent = name;
+      if (currentNameEl) currentNameEl.textContent = name;
+      const inits = name.split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "S";
+      if (topbarAvatarEl && !topbarAvatarEl.querySelector("img")) topbarAvatarEl.textContent = inits;
+      if (currentAvatarEl && !currentAvatarEl.querySelector("img")) currentAvatarEl.textContent = inits;
       toast("Details saved.", "success");
       return onAdvance(STATE.DOCUMENTS);
     }
@@ -1470,7 +1508,13 @@ const runStep = async (state, student, plans, setBusy, onAdvance, documents = {}
       const payAmount = val("onb-pay-amount");
       const payRemarks = val("onb-pay-remarks");
 
-      if (!isCash && !paid && !dueDate) return toast("Please choose the date you will pay by.", "warning");
+      if (!isCash && !paid) {
+        if (!dueDate) return toast("Please choose the date you will pay by.", "warning");
+        const today = todayDate();
+        const maxDate = maxDueDate();
+        if (dueDate < today) return toast("Pay by date cannot be in the past.", "warning");
+        if (dueDate > maxDate) return toast("Pay by date can be at most 7 days from today.", "warning");
+      }
       if (paid && !txnId) return toast("Please enter the transaction ID from your payment.", "warning");
 
       // Strict Terms & Conditions enforcement

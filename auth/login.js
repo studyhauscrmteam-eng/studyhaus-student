@@ -116,6 +116,22 @@ export const completeLogin = async (user) => {
     localStorage.setItem("userRole", userDoc.role || ROLES.STUDENT);
     localStorage.setItem("userId", docId); // Store actual doc ID, whether UID or auto-id
 
+    const realName = (userDoc && (userDoc.name || userDoc.fullName || userDoc.studentName))
+      ? String(userDoc.name || userDoc.fullName || userDoc.studentName).trim()
+      : "";
+    if (realName && !/^\d{10}$/.test(realName) && !realName.includes("@student.shreejilibrary.com")) {
+      localStorage.setItem("userName", realName);
+    }
+    const realEmail = (userDoc && (userDoc.personalEmail || userDoc.email))
+      ? String(userDoc.personalEmail || userDoc.email).trim()
+      : "";
+    if (realEmail && !realEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(realEmail)) {
+      localStorage.setItem("userEmail", realEmail.toLowerCase());
+    }
+    if (userDoc?.phone) {
+      localStorage.setItem("userPhone", String(userDoc.phone).replace(/\D/g, "").slice(-10));
+    }
+
     window.location.href = getRedirectUrlForRole();
 };
 
@@ -156,6 +172,23 @@ export const handlePhoneLogin = async (identifier, password) => {
     }
     localStorage.setItem("userRole", userDoc.role || ROLES.STUDENT);
     localStorage.setItem("userId", docId);
+
+    const realName = (userDoc && (userDoc.name || userDoc.fullName || userDoc.studentName))
+      ? String(userDoc.name || userDoc.fullName || userDoc.studentName).trim()
+      : "";
+    if (realName && !/^\d{10}$/.test(realName) && !realName.includes("@student.shreejilibrary.com")) {
+      localStorage.setItem("userName", realName);
+    }
+    const realEmail = (userDoc && (userDoc.personalEmail || userDoc.email))
+      ? String(userDoc.personalEmail || userDoc.email).trim()
+      : "";
+    if (realEmail && !realEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(realEmail)) {
+      localStorage.setItem("userEmail", realEmail.toLowerCase());
+    }
+    if (userDoc?.phone) {
+      localStorage.setItem("userPhone", String(userDoc.phone).replace(/\D/g, "").slice(-10));
+    }
+
     window.location.href = getRedirectUrlForRole();
   } catch (error) {
     throw new Error(toUserFriendlyAuthError(error));

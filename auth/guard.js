@@ -144,15 +144,21 @@ export const initAuthGuard = () => {
           if (topbarRoleEl) topbarRoleEl.textContent = role;
 
           const cachedName = localStorage.getItem("userName");
-          if (cachedName) {
+          const validCachedName = (cachedName && !/^\d{10}$/.test(cachedName.trim()) && !cachedName.includes("@student.shreejilibrary.com"))
+            ? cachedName.trim()
+            : "";
+          if (validCachedName) {
             const nameEl = document.getElementById("current-user-name");
             const topbarNameEl = document.getElementById("topbar-user-name");
+            const topbarAvatarEl = document.getElementById("topbar-user-avatar");
             const greetEl = document.getElementById("dashboard-greeting");
-            if (nameEl) nameEl.textContent = cachedName;
-            if (topbarNameEl) topbarNameEl.textContent = cachedName;
+            if (nameEl) nameEl.textContent = validCachedName;
+            if (topbarNameEl) topbarNameEl.textContent = validCachedName;
+            const inits = validCachedName.split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "S";
+            if (topbarAvatarEl && !topbarAvatarEl.querySelector("img")) topbarAvatarEl.textContent = inits;
             const hour = new Date().getHours();
             const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-            if (greetEl) greetEl.textContent = `${timeGreeting}, ${cachedName.split(" ")[0]}!`;
+            if (greetEl) greetEl.textContent = `${timeGreeting}, ${validCachedName.split(" ")[0]}!`;
           }
 
           // Unblock the page immediately — don't make the student wait on Firestore!
@@ -184,18 +190,32 @@ export const initAuthGuard = () => {
               return;
             }
 
-            const displayName = (userDoc2 && userDoc2.name)
-              ? userDoc2.name
-              : (user.email ? user.email.split("@")[0] : (cachedName || "User"));
+            const realDocName = (userDoc2 && (userDoc2.name || userDoc2.fullName || userDoc2.studentName))
+              ? String(userDoc2.name || userDoc2.fullName || userDoc2.studentName).trim()
+              : "";
+            const cleanDocName = (realDocName && !/^\d{10}$/.test(realDocName) && !realDocName.includes("@student.shreejilibrary.com"))
+              ? realDocName
+              : "";
+            const isSynthetic = user.email && user.email.endsWith("@student.shreejilibrary.com");
+            const fallbackEmailName = (!isSynthetic && user.email) ? user.email.split("@")[0] : "";
+            const validCached = (cachedName && !/^\d{10}$/.test(cachedName.trim()) && !cachedName.includes("@student.shreejilibrary.com"))
+              ? cachedName.trim()
+              : "";
 
-            localStorage.setItem("userName", displayName);
+            const displayName = cleanDocName || validCached || fallbackEmailName || "Student";
 
-            const initials = displayName
-              .split(" ")
-              .filter(Boolean)
-              .slice(0, 2)
-              .map(w => w[0].toUpperCase())
-              .join("") || "?";
+            if (displayName !== "Student") {
+              localStorage.setItem("userName", displayName);
+            }
+
+            const initials = displayName !== "Student"
+              ? displayName
+                  .split(" ")
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map(w => w[0].toUpperCase())
+                  .join("") || "S"
+              : "S";
 
             const hour = new Date().getHours();
             const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";

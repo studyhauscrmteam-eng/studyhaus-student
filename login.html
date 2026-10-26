@@ -916,6 +916,19 @@
       $id(id)?.addEventListener("input", updateSignupValidationState);
     });
 
+    $id("su-email")?.addEventListener("input", (e) => {
+      const val = (e.target.value || "").trim().toLowerCase();
+      if (val && EMAIL_RE.test(val)) localStorage.setItem("userEmail", val);
+    });
+    $id("su-name")?.addEventListener("input", (e) => {
+      const val = (e.target.value || "").trim();
+      if (val && !/^\d{10}$/.test(val)) localStorage.setItem("userName", val);
+    });
+    $id("su-phone")?.addEventListener("input", (e) => {
+      const d = (e.target.value || "").replace(/\D/g, "");
+      if (d.length === 10) localStorage.setItem("userPhone", d);
+    });
+
     const openSignupTermsModal = () => {
       if (!isSignupFormFilled()) {
         showToast(signupTermsLang === "gu"
@@ -1103,6 +1116,15 @@
         const res = await completeSignup({ identifier: phone, phone, email, password, name });
         localStorage.setItem("userRole", "Student");
         localStorage.setItem("userId", res.uid);
+        if (name && !/^\d{10}$/.test(name.trim())) {
+          localStorage.setItem("userName", name.trim());
+        }
+        if (email) {
+          localStorage.setItem("userEmail", email);
+        }
+        if (phone) {
+          localStorage.setItem("userPhone", phone);
+        }
         window.location.href = "/student/dashboard.html";
       } catch (err) {
         loader.style.display = "none";
@@ -1129,22 +1151,27 @@
     };
 
     const params = new URLSearchParams(window.location.search);
-    const wantsSignup = params.get("tab") === "signup" || params.get("mode") === "signup"
-      || window.location.hash.toLowerCase() === "#signup";
     const prefill = readHashPrefill();
+    const wantsSignup = params.get("tab") === "signup" || params.get("mode") === "signup"
+      || window.location.hash.toLowerCase() === "#signup" || prefill.tab === "signup";
     const hasPrefill = !!(prefill.name || prefill.phone || prefill.mobile || prefill.email || prefill.identifier);
 
     if (wantsSignup || hasPrefill) {
       setTab("signup", false);
-      if (prefill.name && $id("su-name") && !$id("su-name").value) $id("su-name").value = prefill.name;
+      if (prefill.name) {
+        if ($id("su-name") && !$id("su-name").value) $id("su-name").value = prefill.name;
+        localStorage.setItem("userName", prefill.name);
+      }
       const phoneVal = prefill.phone || prefill.mobile || (!prefill.identifier?.includes("@") ? prefill.identifier : "") || "";
       if (phoneVal && $id("su-phone")) {
         const digits = String(phoneVal).replace(/\D/g, "");
         $id("su-phone").value = digits.slice(-10);
+        localStorage.setItem("userPhone", digits.slice(-10));
       }
       const emailVal = prefill.email || (prefill.identifier?.includes("@") ? prefill.identifier : "") || "";
       if (emailVal && $id("su-email")) {
         $id("su-email").value = emailVal.trim();
+        localStorage.setItem("userEmail", emailVal.trim().toLowerCase());
       }
       updateSignupValidationState();
 

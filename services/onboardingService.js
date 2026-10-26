@@ -22,6 +22,7 @@ import {
 } from "firebase/auth";
 import { db } from "../firebase/firebase.js";
 import { normalizePhone, phoneToAuthEmail, authEmailToPhone, isValidPhone } from "./phoneUtils.js";
+import { parsePlanDuration, addDurationToDate } from "./planDuration.js";
 
 /* ------------------------------------------------------------------ states */
 export const STATE = {
@@ -136,6 +137,9 @@ export const findAdoptableRecord = async ({ phone, email, uid }) => {
     const p = await readRef(doc(db, "uniqueness", "phone_" + phone));
     if (p && Array.isArray(p.data.owners)) candidates.push(...p.data.owners);
   }
+  if (uid) {
+    candidates.push("students/" + uid);
+  }
 
   for (const path of candidates) {
     const parts = String(path).split("/");
@@ -173,25 +177,18 @@ export const findAdoptableRecord = async ({ phone, email, uid }) => {
  *
  * @returns {Promise<{uid, studentId, adopted, authEmail}>}
  */
-export const completeSignup = async ({ identifier, password, name }) => {
-  const raw = String(identifier || "").trim();
+export const completeSignup = async ({ identifier, password, name, phone: explicitPhone, email: explicitEmail }) => {
+  const raw = String(identifier || explicitPhone || "").trim();
   const digits = raw.replace(/\D/g, "");
   const isPhone = !raw.includes("@") && digits.length === 10;
 
-  let phone = "";
-  let email = "";
-  if (isPhone) {
-    if (!isValidPhone(digits)) throw new Error("Please enter a valid 10-digit mobile number.");
-    phone = normalizePhone(digits);
-    email = "";
-  } else {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
-      throw new Error("Please enter a valid email address or a 10-digit mobile number.");
-    }
-    email = raw.toLowerCase();
-  }
+  let phone = explicitPhone ? normalizePhone(String(explicitPhone).replace(/\D/g, "")) : (isPhone ? normalizePhone(digits) : "");
+  let email = explicitEmail ? String(explicitEmail).trim().toLowerCase() : (!isPhone ? raw.toLowerCase() : "");
 
-  const authEmail = isPhone ? phoneToAuthEmail(phone) : email;
+  if (phone && !isValidPhone(phone)) throw new Error("Please enter a valid 10-digit mobile number.");
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Please enter a valid email address.");
+
+  const authEmail = phone ? phoneToAuthEmail(phone) : email;
 
   // 1) Auth account first — this is what makes login possible at all.
   let cred;
@@ -214,6 +211,12 @@ export const completeSignup = async ({ identifier, password, name }) => {
     }
   }
   const uid = cred.user.uid;
+  if (name && cred?.user) {
+    try {
+      const { updateProfile } = await import("firebase/auth");
+      await updateProfile(cred.user, { displayName: name });
+    } catch (_) {}
+  }
 
   // 2) Look for a record to adopt BEFORE creating a new one.
   const existing = await findAdoptableRecord({ phone, email, uid });
@@ -243,6 +246,8 @@ export const completeSignup = async ({ identifier, password, name }) => {
   const adopted = await runTransaction(db, async (tx) => {
     const studentsRef = doc(db, "students", studentDocId);
     const usersRef = doc(db, "users", uid);
+    const studentsSnap = await tx.get(studentsRef);
+    const studentsExists = studentsSnap.exists();
 
     // ALL READS FIRST. Firestore rejects any tx.get() issued after a tx.set(),
     // and reading here (instead of below) is what unblocks account creation:
@@ -262,7 +267,7 @@ export const completeSignup = async ({ identifier, password, name }) => {
     const base = {
       uid,
       authEmail,
-      loginId: isPhone ? phone : email,
+      loginId: phone || email,
       role: "Student",
       isStudentSubmission: true,
       source: existing && existing.data.source ? existing.data.source : "Portal",
@@ -270,15 +275,31 @@ export const completeSignup = async ({ identifier, password, name }) => {
       updatedAt: serverTimestamp()
     };
     if (has(name)) base.name = name;
+    if (phone) base.phone = phone;
+    if (email) base.email = email;
 
-    if (existing) {
+    if (studentsExists) {
+      // Existing student doc: security rules allow updating profile fields only.
+      // Must NOT overwrite staff/lifecycle fields (status, studentId, createdAt, etc.)
+      const patch = {
+        updatedAt: serverTimestamp(),
+        termsAccepted: true,
+        ...(has(name) ? { name } : {}),
+        ...(phone ? { phone } : {}),
+        ...(email ? { email } : {})
+      };
+      tx.set(studentsRef, patch, { merge: true });
+    } else if (existing) {
       if (existing.id !== studentDocId) {
         // Move: canonical record follows the person to students/{uid}.
         const moved = {
           ...existing.data,
           ...base,
+          name: has(name) ? name : (existing.data && existing.data.name) || "",
+          phone: phone || (existing.data && existing.data.phone) || "",
+          email: email || (existing.data && existing.data.email) || "",
           loginPassword: password,
-          loginCredentials: `${isPhone ? phone : email} / ${password}`
+          loginCredentials: `${phone || email} / ${password}`
         };
         delete moved.mergedInto;
         moved.needsReview = false;
@@ -317,14 +338,21 @@ export const completeSignup = async ({ identifier, password, name }) => {
           tx.set(oldDocsRef, { studentId: "", migratedTo: "studentDocuments/" + studentDocId }, { merge: true });
         }
       } else {
-        tx.set(studentsRef, base, { merge: true });
+        tx.set(studentsRef, {
+          ...base,
+          loginPassword: password,
+          loginCredentials: `${phone || email} / ${password}`,
+          ...(has(name) ? { name } : {}),
+          ...(phone ? { phone } : {}),
+          ...(email ? { email } : {})
+        }, { merge: true });
       }
     } else {
       // Brand-new member — born at students/{uid}, exactly as the rules expect.
       tx.set(studentsRef, {
         ...base,
         loginPassword: password,
-        loginCredentials: `${isPhone ? phone : email} / ${password}`,
+        loginCredentials: `${phone || email} / ${password}`,
         name: has(name) ? name : "",
         phone,
         email,
@@ -348,12 +376,14 @@ export const completeSignup = async ({ identifier, password, name }) => {
     tx.set(usersRef, {
       uid,
       email: authEmail,
+      personalEmail: email || "",
       name: has(name) ? name : (existing && existing.data.name) || "",
+      phone: phone || "",
       role: "Student",
       status: "Pending",
-      loginId: isPhone ? phone : email,
+      loginId: phone || email,
       loginPassword: password,
-      loginCredentials: `${isPhone ? phone : email} / ${password}`,
+      loginCredentials: `${phone || email} / ${password}`,
       createdAt: serverTimestamp()
     }, { merge: true });
 
@@ -402,27 +432,81 @@ export const ensureStudentRecord = async () => {
   if (!user) throw new Error("You are not signed in.");
 
   const uid = user.uid;
-  const existing = await readRef(doc(db, "students", uid));
-  if (existing) return existing.id;
+
+  // Retrieve any candidate name & personal email from users collection, Auth profile, or localStorage
+  let userSnap = null;
+  try { userSnap = await readRef(doc(db, "users", uid)); } catch (_) {}
+  const uData = (userSnap && userSnap.data) ? userSnap.data : {};
+
+  const cachedName = localStorage.getItem("userName") || "";
+  const validCachedName = (cachedName && !/^\d{10}$/.test(cachedName.trim()) && !cachedName.includes("@student.shreejilibrary.com"))
+    ? cachedName.trim()
+    : "";
+  const candidateName = (uData && uData.name && !/^\d{10}$/.test(uData.name.trim()))
+    ? uData.name.trim()
+    : (user.displayName || validCachedName || "");
 
   const authEmail = (user.email || "").toLowerCase();
   const phone = authEmailToPhone(authEmail) || (authEmail.endsWith("@student.shreejilibrary.com") ? authEmail.split("@")[0] : "");
-  const email = phone ? "" : authEmail;
+  const cachedEmail = localStorage.getItem("userEmail") || localStorage.getItem("studentEmail") || "";
+  const validCachedEmail = (cachedEmail && !cachedEmail.endsWith("@student.shreejilibrary.com") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cachedEmail.trim()))
+    ? cachedEmail.trim().toLowerCase()
+    : "";
 
-  const adopt = await findAdoptableRecord({ phone, email, uid });
+  const candidateEmail = (uData && uData.personalEmail && !uData.personalEmail.endsWith("@student.shreejilibrary.com"))
+    ? uData.personalEmail.trim().toLowerCase()
+    : ((uData && uData.email && !uData.email.endsWith("@student.shreejilibrary.com"))
+      ? uData.email.trim().toLowerCase()
+      : (validCachedEmail || (phone ? "" : authEmail)));
+
+  const existing = await readRef(doc(db, "students", uid));
+  if (existing) {
+    // If the existing doc has empty name or email, self-heal it immediately!
+    const d = existing.data || {};
+    const needsName = (!d.name || /^\d{10}$/.test(String(d.name).trim())) && candidateName;
+    const needsEmail = (!d.email || d.email.endsWith("@student.shreejilibrary.com")) && candidateEmail;
+    if (needsName || needsEmail) {
+      try {
+        const patch = { updatedAt: serverTimestamp() };
+        if (needsName) patch.name = candidateName;
+        if (needsEmail) patch.email = candidateEmail;
+        await updateDoc(doc(db, "students", uid), patch);
+        if (needsName) localStorage.setItem("userName", candidateName);
+        if (needsEmail) localStorage.setItem("userEmail", candidateEmail);
+      } catch (err) {
+        console.warn("[onboarding] auto-heal student record skipped:", err);
+      }
+    }
+    if (candidateEmail && (!uData.personalEmail || uData.personalEmail !== candidateEmail)) {
+      try {
+        await updateDoc(doc(db, "users", uid), {
+          personalEmail: candidateEmail,
+          updatedAt: serverTimestamp()
+        });
+      } catch (_) {}
+    }
+    return existing.id;
+  }
+
+  const adopt = await findAdoptableRecord({ phone, email: candidateEmail, uid });
   if (adopt && adopt.id !== uid) {
     // Same move as in completeSignup — one transaction, never a duplicate.
     await runTransaction(db, async (tx) => {
       const target = doc(db, "students", uid);
 
-      // ALL READS FIRST - Firestore forbids a read after a write in the same
-      // transaction, which is what used to kill this adoption (and with it,
-      // account creation).
       const oldDocsRef = doc(db, "studentDocuments", adopt.id);
       const oldDocsSnap = await tx.get(oldDocsRef);
-      const moved = { ...adopt.data, uid, authEmail, role: "Student", updatedAt: serverTimestamp() };
+      const moved = {
+        ...adopt.data,
+        uid,
+        authEmail,
+        role: "Student",
+        name: candidateName || adopt.data.name || "",
+        email: candidateEmail || adopt.data.email || "",
+        phone: phone || adopt.data.phone || "",
+        updatedAt: serverTimestamp()
+      };
       delete moved.mergedInto;
-      // Keep an approved member approved; otherwise re-open for the wizard.
       const wasApproved =
         adopt.data.approvalStatus === "Approved" || adopt.data.status === "Active";
       if (!wasApproved) { moved.status = "Pending"; moved.approvalStatus = "Pending"; }
@@ -434,6 +518,7 @@ export const ensureStudentRecord = async () => {
         studentId: "",
         admissionNo: "",
         uid: "",
+        authEmail: "",
         updatedAt: serverTimestamp()
       }, { merge: true });
 
@@ -443,8 +528,13 @@ export const ensureStudentRecord = async () => {
       }
 
       tx.set(doc(db, "users", uid), {
-        uid, email: authEmail, role: "Student", status: "Pending",
-        name: adopt.data.name || "", loginId: adopt.data.loginId || phone || email,
+        uid,
+        email: authEmail,
+        personalEmail: candidateEmail || "",
+        role: "Student",
+        status: "Pending",
+        name: candidateName || adopt.data.name || "",
+        loginId: adopt.data.loginId || phone || candidateEmail,
         createdAt: serverTimestamp()
       }, { merge: true });
     });
@@ -457,8 +547,10 @@ export const ensureStudentRecord = async () => {
   await setDoc(doc(db, "students", uid), {
     uid,
     authEmail,
-    loginId: phone || email,
-    name: "", phone, email,
+    loginId: phone || candidateEmail,
+    name: candidateName,
+    phone,
+    email: candidateEmail,
     dob: "", gender: "", parentPhone: "", college: "", course: "",
     address: "", remarks: "",
     planId: "", planName: "", seatNumber: "", seatId: "",
@@ -466,8 +558,6 @@ export const ensureStudentRecord = async () => {
     role: "Student",
     status: "Pending",
     approvalStatus: "Pending",
-    // Not yet an application — nothing for the admin to see until the wizard's
-    // final submit flips this (see submitPaymentAndApplication).
     applicationReady: false,
     isStudentSubmission: true,
     source: "Portal",
@@ -476,9 +566,22 @@ export const ensureStudentRecord = async () => {
     updatedAt: serverTimestamp()
   }, { merge: false });
 
+  if (candidateName) {
+    localStorage.setItem("userName", candidateName);
+  }
+  if (candidateEmail) {
+    localStorage.setItem("userEmail", candidateEmail);
+  }
+
   await setDoc(doc(db, "users", uid), {
-    uid, email: authEmail, role: "Student", status: "Pending",
-    name: "", loginId: phone || email, createdAt: serverTimestamp()
+    uid,
+    email: authEmail,
+    personalEmail: candidateEmail || "",
+    role: "Student",
+    status: "Pending",
+    name: candidateName,
+    loginId: phone || candidateEmail,
+    createdAt: serverTimestamp()
   }, { merge: true });
 
   return uid;
@@ -502,12 +605,20 @@ const pick = (obj, keys) => {
 export const saveDetails = async (studentId, details) => {
   try {
     const payload = pick(details, PROFILE_FIELDS);
+    if (payload.name) payload.name = String(payload.name).trim();
     if (payload.email) payload.email = String(payload.email).trim().toLowerCase();
     if (payload.phone) payload.phone = normalizePhone(payload.phone);
     await updateDoc(doc(db, "students", studentId), {
       ...payload,
       updatedAt: serverTimestamp()
     });
+    try {
+      const uUpdates = { updatedAt: serverTimestamp() };
+      if (payload.name) uUpdates.name = payload.name;
+      if (payload.email) uUpdates.personalEmail = payload.email;
+      if (payload.phone) uUpdates.phone = payload.phone;
+      await updateDoc(doc(db, "users", studentId), uUpdates);
+    } catch (_) {}
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -711,15 +822,48 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         applicationReady: true,
         submittedAt: now
       };
-      // Pay Later records a due date; Pay Now & Cash clear any due date left over
-      // from an earlier attempt so the pending screen can never show both.
+      // Calculate distinct dates:
+      // 1. startDate: active admission start
+      // 2. joinedDate: permanent initial joining date (for anniversary & reference, never overwritten on renewal)
+      // 3. endDate: genuine subscription end date derived from plan duration (e.g. 1 month)
+      // 4. paymentDueDate: pay-by date for Pay Later, or endDate for regular payments
       const todayStr = new Date().toISOString().split("T")[0];
-      const dEnd = new Date();
-      dEnd.setDate(dEnd.getDate() + 30);
-      const defEndStr = dEnd.toISOString().split("T")[0];
-      payload.startDate = snap.data().startDate || todayStr;
-      payload.endDate = snap.data().endDate || (paymentDueDate || defEndStr);
-      payload.paymentDueDate = paymentMethod === "Pay Later" ? (paymentDueDate || payload.endDate) : payload.endDate;
+      const sDateStr = snap.data().startDate || todayStr;
+      payload.startDate = sDateStr;
+      payload.joinedDate = current.joinedDate || current.joiningDate || current.startDate || sDateStr;
+
+      let subEndDateStr = "";
+      try {
+        const { months, days } = parsePlanDuration(current.planDuration || current.duration || current.planName || "1 Month");
+        const sD = new Date(`${sDateStr}T00:00:00`);
+        const eD = addDurationToDate(sD, months > 0 ? months : 1, days);
+        subEndDateStr = eD.toISOString().split("T")[0];
+      } catch (_) {
+        const dEnd = new Date(`${sDateStr}T00:00:00`);
+        dEnd.setDate(dEnd.getDate() + 30);
+        subEndDateStr = dEnd.toISOString().split("T")[0];
+      }
+
+      // If an existing endDate is already a full subscription period (not truncated by Pay Later), keep it
+      const curEnd = snap.data().endDate;
+      const isCurTruncated = curEnd && (curEnd === paymentDueDate || curEnd <= (paymentDueDate || todayStr));
+      payload.endDate = (curEnd && !isCurTruncated) ? curEnd : subEndDateStr;
+
+      // Payment due date is strictly when the student must pay.
+      // Protect: Due date must ALWAYS be strictly before subscription end date.
+      if (paymentMethod === "Pay Later" && paymentDueDate) {
+        if (payload.endDate && paymentDueDate >= payload.endDate) {
+          // Clamp to max 7 days from today or 1 day prior to subscription end date
+          const safeMax = new Date(`${todayStr}T00:00:00`);
+          safeMax.setDate(safeMax.getDate() + 7);
+          const safeMaxStr = safeMax.toISOString().split("T")[0];
+          payload.paymentDueDate = safeMaxStr < payload.endDate ? safeMaxStr : payload.endDate;
+        } else {
+          payload.paymentDueDate = paymentDueDate;
+        }
+      } else {
+        payload.paymentDueDate = payload.endDate;
+      }
 
       tx.update(studentRef, payload);
 
@@ -805,6 +949,22 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         // the student doc + txn claim already succeeded above.
         console.warn("[onboarding] countable payment copy skipped:", payErr && payErr.message ? payErr.message : payErr);
       }
+    // Alert admin immediately in notifications collection for pending admission approval
+    try {
+      const freshSnap = await getDoc(doc(db, "students", studentId)).catch(() => null);
+      const fresh = freshSnap && freshSnap.exists() ? freshSnap.data() : {};
+      await addDoc(collection(db, "notifications"), {
+        type: "new-admission",
+        title: "New admission pending approval",
+        body: `${fresh.name || "Student"} (${fresh.phone || ""}) submitted admission application${fresh.planName ? ` for "${fresh.planName}"` : ""}. Open Admissions → Pending approval.`,
+        studentId,
+        admissionId: studentId,
+        read: false,
+        forRoles: ["Owner/Admin", "Admin", "Manager"],
+        createdAt: serverTimestamp()
+      });
+    } catch (notifErr) {
+      console.warn("[onboarding] notification dispatch error:", notifErr);
     }
 
     return { success: true };

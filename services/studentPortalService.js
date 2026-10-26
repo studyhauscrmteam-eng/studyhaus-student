@@ -96,7 +96,9 @@ export const submitProfileUpdateRequest = async (student, requestedChanges) => {
     if (!targetStudentId) throw new Error("Student profile not loaded. Please sign in again.");
     
     const authEmail = auth?.currentUser?.email;
-    const realEmail = student?.email || (authEmail && !authEmail.endsWith("@student.shreejilibrary.com") ? authEmail : "") || "";
+    const cleanStudentEmail = (student?.email && !student.email.endsWith("@student.shreejilibrary.com")) ? student.email : "";
+    const cleanAuthEmail = (authEmail && !authEmail.endsWith("@student.shreejilibrary.com")) ? authEmail : "";
+    const realEmail = cleanStudentEmail || (student?.personalEmail && !student.personalEmail.endsWith("@student.shreejilibrary.com") ? student.personalEmail : "") || cleanAuthEmail || "";
 
     const payload = {
       studentId: targetStudentId,
