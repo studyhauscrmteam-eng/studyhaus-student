@@ -20,6 +20,34 @@ import {
 } from "./onboardingService.js";
 import { fetchPlansForDropdown } from "./admissionService.js";
 
+// Official Terms & Conditions (Matches terms.html exactly)
+const ONB_TERMS_RULES = {
+  en: [
+    { title: "1. Non-Refundable & Non-Transferable Fees", desc: "All membership fees once paid are strictly non-refundable, non-transferable, and non-extendable under any circumstances except at management's sole discretion." },
+    { title: "2. Seat Allocation & Reservation", desc: "Seat bookings are subject to document verification and library management approval. Seat numbers are allocated strictly based on selected plan availability." },
+    { title: "3. Strict Study Hall Silence", desc: "Absolute pin-drop silence must be maintained in the study hall at all times. Group discussions, talking, and whispering are strictly prohibited." },
+    { title: "4. Outside Footwear Prohibited", desc: "Outside footwear (shoes, sandals) is strictly prohibited inside the study hall. Members must keep their designated desk clean and organized." },
+    { title: "5. Mobile Phone Discipline", desc: "Mobile phones must be kept on 100% silent mode (not even vibration). Attending phone calls inside the study area is strictly prohibited; use designated areas only." },
+    { title: "6. Food & Beverages Restrictions", desc: "Eating meals, snacks, or outside food inside the reading hall is prohibited. Water bottles are allowed. Refreshments are permitted only in designated areas." },
+    { title: "7. Personal Belongings Responsibility", desc: "Students are solely responsible for their personal belongings (laptops, books, chargers, cash). Management accepts no responsibility for lost or unattended items." },
+    { title: "8. Care for Library Property & Facilities", desc: "Handle library assets, desks, chairs, AC units, and charging sockets with care. Any damage caused will be charged to the student and may result in immediate expulsion." },
+    { title: "9. Document Verification & Admission Rights", desc: "Management reserves the right to verify identity documents (Aadhaar Card) and cancel admission without refund if the code of conduct is violated." },
+    { title: "10. Governing Law & Jurisdiction", desc: "These terms are governed by the laws of India. Any disputes shall be subject to the exclusive jurisdiction of the competent courts in Bhavnagar, Gujarat." }
+  ],
+  gu: [
+    { title: "૧. બિન-રિફંડેબલ અને અ-બદલીપાત્ર ફી", desc: "એકવાર ચૂકવેલ સભ્યપદ ફી કોઈપણ સંજોગોમાં પરત (Non-refundable), ટ્રાન્સફર (Non-transferable) કે મુદત વધારી (Non-extendable) શકાશે નહીં." },
+    { title: "૨. સીટ ફાળવણી અને અનામત", desc: "સીટ બુકિંગ મેનેજમેન્ટની ચકાસણી અને મંજૂરીને આધીન છે. સીટ પસંદ કરેલ પ્લાનની ઉપલબ્ધતા મુજબ જ ફાળવવામાં આવશે." },
+    { title: "૩. અભ્યાસ ખંડમાં સંપૂર્ણ શાંતિ", desc: "સ્ટડી હોલમાં હંમેશા સંપૂર્ણ શાંતિ જાળવવી ફરજિયાત છે. અંદરોઅંદર વાતચીત, ચર્ચા કે ધીમેથી બોલવાની પણ સખત મનાઈ છે." },
+    { title: "૪. બહારના પગરખાં પર પ્રતિબંધ", desc: "અભ્યાસ ખંડની અંદર બહારના પગરખાં (બૂટ/ચંપલ) પહેરીને પ્રવેશવાની સખત મનાઈ છે. ડેસ્ક અને લાઈબ્રેરી પરિસર સ્વચ્છ રાખવું." },
+    { title: "૫. મોબાઇલ ફોન અને કોલ્સ નિયમ", desc: "મોબાઇલ ફોન ૧૦૦% સાયલન્ટ મોડ પર રાખવો (વાઇબ્રેશન પણ નહીં). હોલની અંદર ફોન ઉપાડવાની સખત મનાઈ છે; કોલ માટે નિયત લોબી/બાલ્કનીનો જ ઉપયોગ કરવો." },
+    { title: "૬. ખાનપાન પર પ્રતિબંધ", desc: "અભ્યાસ ખંડમાં નાસ્તો, જમવાનું કે બહારનો ખોરાક ખાવાની સખત મનાઈ છે. માત્ર પાણીની બોટલ રાખવાની છૂટ છે. નાસ્તા માટે ટેરેસ/રીફ્રેશમેન્ટ એરિયાનો ઉપયોગ કરવો." },
+    { title: "૭. વ્યક્તિગત સામાનની સુરક્ષા", desc: "પોતાના લેપટોપ, પુસ્તકો, ચાર્જર અને અંગત સામાનની સંપૂર્ણ જવાબદારી વિદ્યાર્થીની પોતાની રહેશે. ચોરી કે નુકસાન માટે મેનેજમેન્ટ જવાબદાર રહેશે નહીં." },
+    { title: "૮. મિલકત અને ઇલેક્ટ્રિકલ જાળવણી", desc: "ફર્નિચર, લાઇટ, પંખા, એસી અને ચાર્જિંગ પોઇન્ટ્સનો કાળજીપૂર્વક ઉપયોગ કરવો. કોઈપણ નુકસાન બદલ દંડ થશે અને સભ્યપદ રદ થઈ શકે છે." },
+    { title: "૯. દસ્તાવેજ ચકાસણી અને અધિકાર", desc: "ઓળખ કાર્ડ (આધાર કાર્ડ) ની ચકાસણી કરવાનો અને ગેરવર્તણૂક જણાયે કોઈપણ રિફંડ વિના સભ્યપદ રદ કરવાનો અંતિમ અધિકાર મેનેજમેન્ટનો રહેશે." },
+    { title: "૧૦. કાયદાકીય ક્ષેત્રાધિકાર", desc: "આ નિયમો ભારતના કાયદાઓ દ્વારા સંચાલિત છે. કોઈપણ વિવાદ ભાવનગર, ગુજરાતની સક્ષમ અદાલતોના અધિકારક્ષેત્ર હેઠળ રહેશે." }
+  ]
+};
+
 const esc = (v) => String(v === null || v === undefined ? "" : v)
   .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -404,6 +432,31 @@ const seatBody = () => `
   <input type="hidden" id="selectedSeatId" />
   <p id="onb-seat-status" style="font-size:12.5px;color:var(--text-muted);margin-top:.75rem;"></p>`;
 
+const ONB_TERMS_RULES = {
+  en: [
+    { title: "1. Fees & Membership", desc: "All membership fees once paid are strictly non-refundable, non-transferable, and non-extendable under any circumstances." },
+    { title: "2. Seat Allocation & Reservation", desc: "Seat bookings are subject to verification and library management approval based on plan availability." },
+    { title: "3. Strict Study Hall Silence", desc: "Absolute pin-drop silence must be maintained in the study hall at all times. Whispering and discussions are strictly prohibited." },
+    { title: "4. Outside Footwear Prohibited", desc: "Outside footwear (shoes, sandals) is strictly prohibited inside the study hall. Members must keep their designated desk clean and organized." },
+    { title: "5. Mobile Phone Silent Rule", desc: "Mobile phones must be on 100% silent mode (not even vibration). Attending phone calls inside the study area is strictly prohibited; use designated areas only." },
+    { title: "6. Food & Drink Policies", desc: "Eating meals, snacks, or outside food inside the reading hall is prohibited. Water bottles are allowed. Refreshments are permitted only in the cafeteria/terrace lounge." },
+    { title: "7. Personal Belongings Responsibility", desc: "Students are solely responsible for their personal belongings (laptops, books, chargers, cash). Management accepts no responsibility for lost or unattended items." },
+    { title: "8. Library Property Care", desc: "Handle library assets, desks, chairs, AC units, and charging sockets with care. Any damage caused will be charged to the student and may result in immediate expulsion." },
+    { title: "9. Document Verification & Admission Rights", desc: "Management reserves the right to verify identity documents (Aadhaar Card) and cancel admission without refund if code of conduct is violated." }
+  ],
+  gu: [
+    { title: "૧. બિન-રિફંડેબલ અને અ-બદલીપાત્ર ફી", desc: "એકવાર ચૂકવેલ સભ્યપદ ફી કોઈપણ સંજોગોમાં પરત (Non-refundable), ટ્રાન્સફર (Non-transferable) કે મુદત વધારી (Non-extendable) શકાશે નહીં." },
+    { title: "૨. સીટ ફાળવણી અને અનામત", desc: "સીટ બુકિંગ મેનેજમેન્ટની ચકાસણી અને મંજૂરીને આધીન છે. સીટ પસંદ કરેલ પ્લાનની ઉપલબ્ધતા મુજબ જ ફાળવવામાં આવશે." },
+    { title: "૩. અભ્યાસ ખંડમાં સંપૂર્ણ શાંતિ", desc: "સ્ટડી હોલમાં હંમેશા સંપૂર્ણ શાંતિ જાળવવી ફરજિયાત છે. અંદરોઅંદર વાતચીત, ચર્ચા કે ધીમેથી બોલવાની પણ સખત મનાઈ છે." },
+    { title: "૪. બહારના પગરખાં પર પ્રતિબંધ", desc: "અભ્યાસ ખંડની અંદર બહારના પગરખાં (બૂટ/ચંપલ) પહેરીને પ્રવેશવાની સખત મનાઈ છે. ડેસ્ક અને લાઈબ્રેરી પરિસર સ્વચ્છ રાખવું." },
+    { title: "૫. મોબાઇલ ફોન અને કોલ્સ નિયમ", desc: "મોબાઇલ ફોન ૧૦૦% સાયલન્ટ મોડ પર રાખવો (વાઇબ્રેશન પણ નહીં). હોલની અંદર ફોન ઉપાડવાની સખત મનાઈ છે; કોલ માટે નિયત લોબી/બાલ્કનીનો જ ઉપયોગ કરવો." },
+    { title: "૬. ખાનપાન પર પ્રતિબંધ", desc: "અભ્યાસ ખંડમાં નાસ્તો, જમવાનું કે બહારનો ખોરાક ખાવાની સખત મનાઈ છે. માત્ર પાણીની બોટલ રાખવાની છૂટ છે. નાસ્તા માટે ટેરેસ/રીફ્રેશમેન્ટ એરિયાનો ઉપયોગ કરવો." },
+    { title: "૭. વ્યક્તિગત સામાનની સુરક્ષા", desc: "પોતાના લેપટોપ, પુસ્તકો, ચાર્જર અને અંગત સામાનની સંપૂર્ણ જવાબદારી વિદ્યાર્થીની પોતાની રહેશે. ચોરી કે નુકસાન માટે મેનેજમેન્ટ જવાબદાર રહેશે નહીં." },
+    { title: "૮. મિલકત અને ઇલેક્ટ્રિકલ જાળવણી", desc: "ફર્નિચર, લાઇટ, પંખા, એસી અને ચાર્જિંગ પોઇન્ટ્સનો કાળજીપૂર્વક ઉપયોગ કરવો. કોઈપણ નુકસાન બદલ દંડ થશે અને સભ્યપદ રદ થઈ શકે છે." },
+    { title: "૯. દસ્તાવેજ ચકાસણી અને અધિકાર", desc: "ઓળખ કાર્ડ (આધાર કાર્ડ) ની ચકાસણી કરવાનો અને ગેરવર્તણૂક જણાયે કોઈપણ રિફંડ વિના સભ્યપદ રદ કરવાનો અંતિમ અધિકાર મેનેજમેન્ટનો રહેશે." }
+  ]
+};
+
 const paymentBody = (s, plan, amount) => `
   <h3 style="font-size:15px;margin:0 0 .5rem;">Select Payment Method</h3>
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 1.25rem;">Choose your preferred payment method to complete admission.</p>
@@ -476,6 +529,72 @@ const paymentBody = (s, plan, amount) => `
         ${field("onb-due", "Pay by (date)", input("onb-due", "date", s.paymentDueDate || defaultDueDate(), "required"), true, false)}
       </div>
     </label>
+  </div>
+
+  <!-- TERMS & CONDITIONS COMPACT TRIGGER ROW -->
+  <div style="margin-top:1.25rem;border:1px solid var(--border-bright);border-radius:12px;background:var(--bg-card);padding:1rem;">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <input type="checkbox" id="onb-terms-accept" style="margin-top:2px;width:18px;height:18px;accent-color:var(--primary);cursor:pointer;flex-shrink:0;" />
+      <div style="font-size:12.5px;line-height:1.45;color:var(--text-primary);">
+        <span id="onb-terms-agree-text">
+          I have read and agree to the <button type="button" id="onb-open-terms-btn" style="background:none;border:none;padding:0;color:var(--primary);font-weight:700;text-decoration:underline;cursor:pointer;font-size:12.5px;">Terms &amp; Conditions</button> of Shreeji Reading Library <span style="color:#e53e3e;font-weight:700;">*</span>
+        </span>
+        <div id="onb-terms-subtext" style="font-size:11px;color:var(--text-muted);margin-top:3px;font-weight:500;">
+          Select payment method above to unlock agreement *
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- POP-UP MODAL DIALOG FOR ONBOARDING TERMS -->
+  <div id="onb-terms-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.75);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg-card, #ffffff);color:var(--text-primary, #0f172a);width:100%;max-width:580px;max-height:85vh;border-radius:16px;box-shadow:0 20px 25px -5px rgba(0,0,0,0.25);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border, #cbd5e1);">
+      
+      <!-- Modal Header -->
+      <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg-hover);">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <div>
+            <div id="onb-modal-title" style="font-size:14px;font-weight:700;line-height:1.2;">Terms &amp; Conditions</div>
+            <div id="onb-modal-subtitle" style="font-size:11px;color:var(--text-muted);">Shreeji Reading Library · Bhavnagar</div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;">
+          <!-- Switcher -->
+          <div style="display:flex;gap:2px;background:var(--bg-card);padding:2px;border-radius:6px;border:1px solid var(--border);">
+            <button type="button" id="onb-terms-lang-en" style="border:none;background:var(--primary);color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;cursor:pointer;">ENG</button>
+            <button type="button" id="onb-terms-lang-gu" style="border:none;background:transparent;color:var(--text-muted);font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;cursor:pointer;">ગુજ</button>
+          </div>
+          <!-- Close Button -->
+          <button type="button" id="onb-modal-close-btn" aria-label="Close" style="border:none;background:var(--bg-card);color:var(--text-muted);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Compulsory scroll alert banner -->
+      <div id="onb-modal-badge" style="padding:9px 16px;font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:6px;background:rgba(245,158,11,0.12);color:#d97706;border-bottom:1px solid rgba(245,158,11,0.25);">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span id="onb-modal-badge-text">Please scroll through and review the complete terms to enable acceptance *</span>
+      </div>
+
+      <!-- Scrollable terms list (10 items matching terms.html) -->
+      <div id="onb-modal-terms-box" style="flex:1;overflow-y:auto;padding:14px 18px;font-size:12px;line-height:1.6;color:var(--text-secondary);">
+      </div>
+
+      <!-- Modal Footer -->
+      <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg-hover);">
+        <button type="button" id="onb-modal-cancel-btn" style="border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);font-size:12px;font-weight:600;padding:7px 16px;border-radius:8px;cursor:pointer;">
+          Close
+        </button>
+        <button type="button" id="onb-modal-accept-btn" disabled style="border:none;background:var(--primary);color:#ffffff;font-size:12px;font-weight:700;padding:8px 18px;border-radius:8px;cursor:not-allowed;opacity:0.5;display:flex;align-items:center;gap:6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          <span id="onb-modal-accept-text">I Accept the Terms</span>
+        </button>
+      </div>
+
+    </div>
   </div>
   <p id="onb-pay-status" style="font-size:12.5px;color:var(--text-muted);"></p>`;
 
@@ -992,6 +1111,191 @@ export const renderOnboarding = async (opts) => {
     if (nRadio) nRadio.addEventListener("change", syncCards);
     if (lRadio) lRadio.addEventListener("change", syncCards);
     syncCards();
+
+    /* --- Terms & Conditions Pop-up Modal Init --- */
+    window.__onbTermsScrolled = false;
+    let onbTermsLang = (window.currentLang === "gu" || (localStorage.getItem("systemLanguage") === "gu")) ? "gu" : "en";
+
+    const isOnbPaymentFilled = () => {
+      const cashEl = document.getElementById("onb-pay-cash");
+      const nowEl = document.getElementById("onb-pay-now");
+      const laterEl = document.getElementById("onb-pay-later");
+      const isCash = !!(cashEl && cashEl.checked);
+      const isNow = !!(nowEl && nowEl.checked);
+      const isLater = !!(laterEl && laterEl.checked);
+      if (!isCash && !isNow && !isLater) return false;
+      if (isNow) {
+        const txn = (document.getElementById("onb-txn")?.value || "").trim();
+        if (!txn) return false;
+      }
+      if (isLater) {
+        const due = (document.getElementById("onb-due")?.value || "").trim();
+        if (!due) return false;
+      }
+      return true;
+    };
+
+    const updateOnbTermsHelper = () => {
+      const sub = document.getElementById("onb-terms-subtext");
+      const chk = document.getElementById("onb-terms-accept");
+      if (!sub) return;
+      if (chk && chk.checked) {
+        sub.textContent = onbTermsLang === "gu" ? "✓ નિયમો વાંચીને સ્વીકારવામાં આવ્યા છે" : "✓ Terms reviewed and accepted";
+        sub.style.color = "var(--primary)";
+      } else if (isOnbPaymentFilled()) {
+        sub.textContent = onbTermsLang === "gu" ? "નિયમો વાંચીને સંમતિ આપવા માટે ક્લિક કરો *" : "Please review and accept the Terms & Conditions *";
+        sub.style.color = "#d97706";
+      } else {
+        sub.textContent = onbTermsLang === "gu" ? "નિયમો જોવા માટે ઉપર પેમેન્ટ પદ્ધતિ પસંદ કરો *" : "Select payment method above to unlock agreement *";
+        sub.style.color = "var(--text-muted)";
+      }
+    };
+
+    ["onb-pay-cash", "onb-pay-now", "onb-pay-later"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("change", updateOnbTermsHelper);
+    });
+    ["onb-txn", "onb-due"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("input", updateOnbTermsHelper);
+    });
+
+    const openOnbTermsModal = () => {
+      if (!isOnbPaymentFilled()) {
+        toast(onbTermsLang === "gu"
+          ? "નિયમો અને શરતો જોવા માટે કૃપા કરીને પહેલા ઉપર પેમેન્ટ વિકલ્પ પસંદ કરો."
+          : "Please select your payment option above before reviewing Terms & Conditions.", "warning");
+        return;
+      }
+      const modal = document.getElementById("onb-terms-modal");
+      if (modal) {
+        modal.style.display = "flex";
+        renderOnbTerms(onbTermsLang);
+      }
+    };
+    window.openOnbTermsModal = openOnbTermsModal;
+
+    const closeOnbTermsModal = () => {
+      const modal = document.getElementById("onb-terms-modal");
+      if (modal) modal.style.display = "none";
+    };
+
+    const renderOnbTerms = (lang) => {
+      onbTermsLang = lang;
+      const box = document.getElementById("onb-modal-terms-box");
+      const title = document.getElementById("onb-modal-title");
+      const sub = document.getElementById("onb-modal-subtitle");
+      const btnEn = document.getElementById("onb-terms-lang-en");
+      const btnGu = document.getElementById("onb-terms-lang-gu");
+      const badgeText = document.getElementById("onb-modal-badge-text");
+      const acceptText = document.getElementById("onb-modal-accept-text");
+      const cancelBtn = document.getElementById("onb-modal-cancel-btn");
+
+      if (btnEn && btnGu) {
+        btnEn.style.background = lang === "en" ? "var(--primary)" : "transparent";
+        btnEn.style.color = lang === "en" ? "#fff" : "var(--text-muted)";
+        btnGu.style.background = lang === "gu" ? "var(--primary)" : "transparent";
+        btnGu.style.color = lang === "gu" ? "#fff" : "var(--text-muted)";
+      }
+      if (title) {
+        title.textContent = lang === "gu" ? "નિયમો અને શરતો" : "Terms & Conditions";
+      }
+      if (sub) {
+        sub.textContent = lang === "gu" ? "શ્રીજી રીડિંગ લાઇબ્રેરી · ભાવનગર" : "Shreeji Reading Library · Bhavnagar";
+      }
+      if (cancelBtn) {
+        cancelBtn.textContent = lang === "gu" ? "બંધ કરો" : "Close";
+      }
+      if (acceptText) {
+        acceptText.textContent = lang === "gu" ? "હું નિયમો સ્વીકારું છું" : "I Accept the Terms";
+      }
+
+      if (badgeText && !window.__onbTermsScrolled) {
+        badgeText.textContent = lang === "gu"
+          ? "સંમતિ આપવા માટે કૃપા કરીને સંપૂર્ણ નિયમો નીચે સુધી વાંચો *"
+          : "Please scroll through and review the complete terms to enable acceptance *";
+      }
+      if (box) {
+        box.innerHTML = ONB_TERMS_RULES[lang].map((item) => `
+          <div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
+            <div style="font-weight:700;color:var(--text-primary);margin-bottom:3px;font-size:12.5px;">${item.title}</div>
+            <div style="color:var(--text-secondary);font-size:11.5px;line-height:1.55;">${item.desc}</div>
+          </div>
+        `).join("") + `
+          <div style="text-align:center;font-size:11px;font-weight:600;color:var(--text-muted);padding-top:8px;">
+            ${lang === "gu" ? "— તમામ નિયમો અને શરતો સમાપ્ત —" : "— End of Terms & Conditions —"}
+          </div>`;
+      }
+      setTimeout(() => {
+        if (box && box.scrollHeight <= box.clientHeight + 20) {
+          unlockOnbTerms();
+        }
+      }, 60);
+    };
+
+    const unlockOnbTerms = () => {
+      window.__onbTermsScrolled = true;
+      const badge = document.getElementById("onb-modal-badge");
+      const badgeText = document.getElementById("onb-modal-badge-text");
+      const acceptBtn = document.getElementById("onb-modal-accept-btn");
+      if (badge) {
+        badge.style.background = "rgba(16,185,129,0.12)";
+        badge.style.color = "#10b981";
+        badge.style.borderColor = "rgba(16,185,129,0.25)";
+      }
+      if (badgeText) {
+        badgeText.textContent = onbTermsLang === "gu"
+          ? "તમે સંપૂર્ણ નિયમો વાંચી લીધા છે. હવે તમે નીચે સંમતિ આપી શકો છો."
+          : "You have reviewed the complete terms. You may now accept below.";
+      }
+      if (acceptBtn) {
+        acceptBtn.disabled = false;
+        acceptBtn.style.opacity = "1";
+        acceptBtn.style.cursor = "pointer";
+      }
+    };
+
+    const tBox = document.getElementById("onb-modal-terms-box");
+    if (tBox) {
+      tBox.addEventListener("scroll", (e) => {
+        const el = e.currentTarget;
+        if (el.scrollHeight - el.scrollTop <= el.clientHeight + 25) {
+          unlockOnbTerms();
+        }
+      });
+    }
+
+    document.getElementById("onb-terms-lang-en")?.addEventListener("click", () => renderOnbTerms("en"));
+    document.getElementById("onb-terms-lang-gu")?.addEventListener("click", () => renderOnbTerms("gu"));
+    document.getElementById("onb-modal-close-btn")?.addEventListener("click", closeOnbTermsModal);
+    document.getElementById("onb-modal-cancel-btn")?.addEventListener("click", closeOnbTermsModal);
+    document.getElementById("onb-open-terms-btn")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      openOnbTermsModal();
+    });
+
+    document.getElementById("onb-modal-accept-btn")?.addEventListener("click", () => {
+      window.__onbTermsScrolled = true;
+      const chk = document.getElementById("onb-terms-accept");
+      if (chk) chk.checked = true;
+      updateOnbTermsHelper();
+      closeOnbTermsModal();
+    });
+
+    document.getElementById("onb-terms-accept")?.addEventListener("click", (e) => {
+      if (!isOnbPaymentFilled()) {
+        e.preventDefault();
+        e.target.checked = false;
+        toast(onbTermsLang === "gu"
+          ? "નિયમો અને શરતો જોવા માટે કૃપા કરીને પહેલા ઉપર પેમેન્ટ વિકલ્પ પસંદ કરો."
+          : "Please select your payment option above before reviewing Terms & Conditions.", "warning");
+        return;
+      }
+      if (!window.__onbTermsScrolled) {
+        e.preventDefault();
+        openOnbTermsModal();
+      } else {
+        updateOnbTermsHelper();
+      }
+    });
   }
 
   /* -------------------------------------------------------- step navigation */
@@ -1193,6 +1497,18 @@ const runStep = async (state, student, plans, setBusy, onAdvance, documents = {}
 
       if (!isCash && !paid && !dueDate) return toast("Please choose the date you will pay by.", "warning");
       if (paid && !txnId) return toast("Please enter the transaction ID from your payment.", "warning");
+
+      // Strict Terms & Conditions enforcement
+      const chkTerms = document.getElementById("onb-terms-accept");
+      if (!window.__onbTermsScrolled || !chkTerms || !chkTerms.checked) {
+        if (typeof window.openOnbTermsModal === "function") window.openOnbTermsModal();
+        return toast(
+          (window.currentLang === "gu" || localStorage.getItem("systemLanguage") === "gu")
+            ? "સીટ કન્ફર્મેશન માટે કૃપા કરીને નિયમો અને શરતો ધ્યાનપૂર્વક વાંચીને સ્વીકારો."
+            : "Please read and accept the Terms & Conditions before confirming your seat.",
+          "warning"
+        );
+      }
 
       setBusy(true, isCash ? "Submitting application…" : (paid ? "Submitting payment…" : "Submitting…"));
       let shot = "";

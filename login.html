@@ -236,16 +236,93 @@
       cursor: not-allowed;
     }
 
-    #error-message {
-      color: #ef4444;
-      font-size: 0.85rem;
-      margin-bottom: 1rem;
-      display: none;
-      text-align: center;
-      background: #fef2f2;
-      border: 1px solid #fca5a5;
-      padding: 8px;
-      border-radius: 6px;
+    /* Floating Toast System */
+    #toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 100000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      max-width: calc(100vw - 32px);
+      width: 380px;
+    }
+
+    @media (max-width: 600px) {
+      #toast-container {
+        top: 14px;
+        left: 16px;
+        right: 16px;
+        width: auto;
+      }
+    }
+
+    .toast-msg {
+      pointer-events: auto;
+      background: #0f172a;
+      color: #f8fafc;
+      border-radius: 12px;
+      padding: 12px 14px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 500;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transform: translateY(-16px);
+      opacity: 0;
+      transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .toast-msg.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .toast-msg.toast-error {
+      border-left: 4px solid #ef4444;
+    }
+
+    .toast-msg.toast-warning {
+      border-left: 4px solid #f59e0b;
+    }
+
+    .toast-msg.toast-success {
+      border-left: 4px solid #10b981;
+    }
+
+    .toast-msg.toast-info {
+      border-left: 4px solid #3b82f6;
+    }
+
+    .toast-msg-icon {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .toast-msg-text {
+      flex: 1;
+    }
+
+    .toast-msg-close {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #94a3b8;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s;
+    }
+
+    .toast-msg-close:hover {
+      color: #ffffff;
     }
 
     #global-loader {
@@ -336,6 +413,8 @@
 </head>
 
 <body>
+  <div id="toast-container" aria-live="polite"></div>
+
   <div id="global-loader">
     <div class="spinner"></div>
     <div style="font-weight: 500; color: #0f172a; font-size: 0.9rem;">Authenticating...</div>
@@ -360,8 +439,6 @@
         <button type="button" class="auth-tab" id="tab-signup" role="tab">Create account</button>
       </div>
 
-      <div id="error-message"></div>
-
       <!-- ── Sign in ─────────────────────────────────────────────────── -->
       <form id="login-form">
         <div class="form-group">
@@ -385,30 +462,64 @@
       <!-- ── Create account ──────────────────────────────────────────── -->
       <form id="signup-form" style="display:none;">
         <div class="form-group">
-          <label>Full name</label>
-          <input type="text" id="su-name" placeholder="Your full name" autocomplete="name" />
+          <label>Full name <span style="color:#ef4444; font-weight:700;">*</span></label>
+          <input type="text" id="su-name" required placeholder="Your full name" autocomplete="name" />
         </div>
 
         <div class="form-group">
-          <label>Mobile number or Email</label>
-          <input type="text" id="su-identifier" placeholder="9876543210 or student@example.com"
-            autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
-          <div class="pw-req">This becomes your login ID — use your mobile number, or your email.</div>
-        </div>
-
-        <div class="form-group">
-          <label>Password</label>
-          <div class="pw-wrap">
-            <input type="password" id="su-password" minlength="6"
-              placeholder="At least 6 characters" autocomplete="new-password" />
-            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <label>Mobile number <span style="color:#ef4444; font-weight:700;">*</span></label>
+          <div style="position: relative;">
+            <input type="tel" id="su-phone" required placeholder="9876543210" maxlength="10" inputmode="numeric" autocomplete="tel-national" style="padding-right: 36px;" />
+            <span id="su-phone-icon" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); display: none; pointer-events: none;"></span>
+          </div>
+          <div id="su-phone-hint" class="pw-req" style="margin-top: 4px; font-size: 11.5px; display: flex; align-items: center; gap: 4px;">
+            10-digit mobile number for portal access
           </div>
         </div>
 
         <div class="form-group">
-          <label>Confirm password</label>
-          <input type="password" id="su-confirm" minlength="6"
+          <label>Email address <span style="color:#ef4444; font-weight:700;">*</span></label>
+          <div style="position: relative;">
+            <input type="email" id="su-email" required placeholder="student@example.com" autocomplete="email" autocapitalize="none" spellcheck="false" style="padding-right: 36px;" />
+            <span id="su-email-icon" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); display: none; pointer-events: none;"></span>
+          </div>
+          <div id="su-email-hint" class="pw-req" style="margin-top: 4px; font-size: 11.5px; display: flex; align-items: center; gap: 4px;">
+            Valid email address for receipts &amp; notifications
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Password <span style="color:#ef4444; font-weight:700;">*</span></label>
+          <div class="pw-wrap">
+            <input type="password" id="su-password" required minlength="6"
+              placeholder="At least 6 characters" autocomplete="new-password" />
+            <button type="button" class="pw-eye" id="su-eye" title="Show / hide password" aria-label="Show password" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+          <div id="su-pw-hint" class="pw-req" style="margin-top: 4px; font-size: 11.5px; display: flex; align-items: center; gap: 4px;">
+            At least 6 characters
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Confirm password <span style="color:#ef4444; font-weight:700;">*</span></label>
+          <input type="password" id="su-confirm" required minlength="6"
             placeholder="Repeat your password" autocomplete="new-password" />
+          <div id="su-confirm-hint" class="pw-req" style="margin-top: 4px; font-size: 11.5px; display: flex; align-items: center; gap: 4px;"></div>
+        </div>
+
+        <!-- ── Terms & Conditions (Compact trigger row) ── -->
+        <div class="form-group" style="margin-top: 1rem; margin-bottom: 1.25rem;">
+          <div style="display: flex; align-items: flex-start; gap: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px;">
+            <input type="checkbox" id="su-terms-accept" style="margin-top: 2px; width: 16px; height: 16px; accent-color: #059669; cursor: pointer; flex-shrink: 0;" />
+            <div style="font-size: 12px; line-height: 1.45; color: #334155;">
+              <span id="su-terms-agree-text">
+                I have read and agree to the <button type="button" id="su-open-terms-btn" style="background:none; border:none; padding:0; color:#059669; font-weight:700; text-decoration:underline; cursor:pointer; font-size:12px;">Terms &amp; Conditions</button> of Shreeji Reading Library <span style="color:#e53e3e;font-weight:700;">*</span>
+              </span>
+              <div id="su-terms-subtext" style="font-size: 11px; color: #64748b; margin-top: 3px; font-weight: 500;">
+                Complete required form details above to unlock agreement *
+              </div>
+            </div>
+          </div>
         </div>
 
         <button type="submit" class="btn-submit" id="btn-signup">Create account</button>
@@ -418,6 +529,57 @@
           collects your details, documents, plan, seat and payment.
         </p>
       </form>
+    </div>
+  </div>
+
+  <!-- ── Terms & Conditions Pop-up Modal Dialog ── -->
+  <div id="su-terms-modal" style="display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(4px); align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;">
+    <div style="background: #ffffff; width: 100%; max-width: 580px; max-height: 85vh; border-radius: 16px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #cbd5e1;">
+      
+      <!-- Modal Header -->
+      <div style="padding: 14px 18px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; background: #f8fafc;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <div>
+            <div id="su-modal-title" style="font-size: 14px; font-weight: 700; color: #0f172a; line-height: 1.2;">Terms &amp; Conditions</div>
+            <div id="su-modal-subtitle" style="font-size: 11px; color: #64748b;">Shreeji Reading Library · Bhavnagar</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <!-- Switcher -->
+          <div style="display: flex; gap: 2px; background: #e2e8f0; padding: 2px; border-radius: 6px;">
+            <button type="button" id="su-terms-lang-en" style="border:none; background:#059669; color:#fff; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; cursor:pointer;">ENG</button>
+            <button type="button" id="su-terms-lang-gu" style="border:none; background:transparent; color:#64748b; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; cursor:pointer;">ગુજ</button>
+          </div>
+          <!-- Close Button -->
+          <button type="button" id="su-modal-close-btn" aria-label="Close" style="border:none; background:#e2e8f0; color:#475569; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Compulsory scroll alert banner -->
+      <div id="su-modal-badge" style="padding: 9px 16px; font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; background: #fef3c7; color: #92400e; border-bottom: 1px solid #fde68a;">
+        <svg id="su-modal-badge-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span id="su-modal-badge-text">Please scroll through and review the complete terms to enable acceptance *</span>
+      </div>
+
+      <!-- Scrollable terms list (10 items matching terms.html) -->
+      <div id="su-modal-terms-box" style="flex: 1; overflow-y: auto; padding: 14px 18px; font-size: 12px; line-height: 1.6; color: #334155;">
+      </div>
+
+      <!-- Modal Footer -->
+      <div style="padding: 12px 18px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #f8fafc;">
+        <button type="button" id="su-modal-cancel-btn" style="border: 1px solid #cbd5e1; background: #ffffff; color: #475569; font-size: 12px; font-weight: 600; padding: 7px 16px; border-radius: 8px; cursor: pointer;">
+          Close
+        </button>
+        <button type="button" id="su-modal-accept-btn" disabled style="border: none; background: #059669; color: #ffffff; font-size: 12px; font-weight: 700; padding: 8px 18px; border-radius: 8px; cursor: not-allowed; opacity: 0.5; display: flex; align-items: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          <span id="su-modal-accept-text">I Accept the Terms</span>
+        </button>
+      </div>
+
     </div>
   </div>
 
@@ -439,7 +601,6 @@
     initAuthGuard();
 
     const $id = (id) => document.getElementById(id);
-    const errorDiv = $id("error-message");
     const loader = $id("global-loader");
     const loginForm = $id("login-form");
     const signupForm = $id("signup-form");
@@ -448,33 +609,63 @@
     const authTitle = $id("auth-title");
     const authDesc = $id("auth-desc");
 
-    const showError = (msg, ok = false) => {
-      errorDiv.textContent = msg;
-      if (ok) {
-        errorDiv.style.color = "#059669";
-        errorDiv.style.background = "#d1fae5";
-        errorDiv.style.borderColor = "#6ee7b7";
-      } else {
-        errorDiv.style.color = "#e53e3e";
-        errorDiv.style.background = "#fee2e2";
-        errorDiv.style.borderColor = "#fecaca";
-      }
-      errorDiv.style.display = "block";
-    };
-    const hideError = () => { errorDiv.style.display = "none"; };
+    /* ── Floating Toast System (Never injects in-between alerts) ─────────── */
+    const showToast = (message, type = "error", duration = 3500) => {
+      const container = $id("toast-container");
+      if (!container) return;
 
-    /* ── Login-ID check: 10-digit phone OR valid email ──────────────────
-       Runs BEFORE any Firebase call so typos never hit Auth. Signup
-       duplicate pre-check below is best-effort UX only — the authoritative
-       no-duplicate guard stays in completeSignup's transaction claims. */
+      const toast = document.createElement("div");
+      toast.className = `toast-msg toast-${type}`;
+
+      let iconSvg = "";
+      if (type === "success") {
+        iconSvg = '<svg class="toast-msg-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+      } else if (type === "warning") {
+        iconSvg = '<svg class="toast-msg-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+      } else if (type === "info") {
+        iconSvg = '<svg class="toast-msg-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+      } else {
+        iconSvg = '<svg class="toast-msg-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+      }
+
+      toast.innerHTML = `
+        ${iconSvg}
+        <div class="toast-msg-text">${message}</div>
+        <button type="button" class="toast-msg-close" aria-label="Close notification">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      `;
+
+      const closeBtn = toast.querySelector(".toast-msg-close");
+      const dismiss = () => {
+        toast.classList.remove("show");
+        setTimeout(() => toast.remove(), 250);
+      };
+      closeBtn?.addEventListener("click", dismiss);
+
+      container.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.add("show"));
+
+      if (duration > 0) {
+        setTimeout(dismiss, duration);
+      }
+    };
+    window.showToast = showToast;
+    const showError = (msg, ok = false) => { showToast(msg, ok ? "success" : "error"); };
+    const hideError = () => {};
+
+    /* ── Validation helpers ─────────────────────────────────────────── */
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const CHECK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+    const ALERT_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+
     const normalizeIdDigits = (v) => String(v || "").replace(/\D/g, "");
+
     const classifyLoginId = (raw) => {
       const v = String(raw || "").trim();
       if (!v) return { ok: false, kind: "empty", message: "Please enter your mobile number or email." };
       if (!v.includes("@")) {
         const digits = normalizeIdDigits(v);
-        // Strict 10 digits (allows +91/0 prefix forms that normalize to 10).
         let norm = digits;
         if (digits.length === 12 && digits.startsWith("91")) norm = digits.slice(2);
         else if (digits.length === 11 && digits.startsWith("0")) norm = digits.slice(1);
@@ -489,22 +680,21 @@
       return { ok: true, kind: "email", email: v.toLowerCase() };
     };
 
-    // Best-effort duplicate hint: if the uniqueness claim already exists,
-    // tell the user to sign in instead of creating a second ID. Failures
-    // (offline / permission) are ignored — completeSignup still enforces it.
-    const checkSignupNotDuplicate = async (classified) => {
+    const checkSignupNotDuplicate = async ({ phone, email }) => {
       try {
         const { doc, getDoc } = await import("firebase/firestore");
         const { db } = await import("./firebase/firebase.js");
-        let claimId = "";
-        if (classified.kind === "phone") claimId = "phone_" + classified.phone;
-        else if (classified.kind === "email") claimId = "email_" + classified.email;
-        if (!claimId) return null;
-        const snap = await getDoc(doc(db, "uniqueness", claimId));
-        if (snap.exists()) {
-          return classified.kind === "phone"
-            ? "This mobile number already has an account. Please sign in instead."
-            : "This email already has an account. Please sign in instead.";
+        if (phone) {
+          const snap = await getDoc(doc(db, "uniqueness", "phone_" + phone));
+          if (snap.exists()) {
+            return "This mobile number already has an account. Please sign in instead.";
+          }
+        }
+        if (email) {
+          const snap = await getDoc(doc(db, "uniqueness", "email_" + email.toLowerCase()));
+          if (snap.exists()) {
+            return "This email already has an account. Please sign in instead.";
+          }
         }
       } catch (_) { /* ignore — authoritative check runs in signup */ }
       return null;
@@ -517,10 +707,10 @@
       tabSignup.classList.toggle("active", isSignup);
       loginForm.style.display = isSignup ? "none" : "";
       signupForm.style.display = isSignup ? "" : "none";
-      hideError();
       if (isSignup) {
         authTitle.textContent = "Create your account";
-        authDesc.textContent = "Your login ID is your mobile number or email — then a short 5-step form collects the rest.";
+        authDesc.textContent = "Enter your details to create your student account and complete seat selection.";
+        updateSignupValidationState();
       } else {
         authTitle.textContent = "Sign in to your account";
         authDesc.textContent = "Student Portal — sign in with your phone number or email.";
@@ -559,43 +749,339 @@
     /* ── Sign in submit ─────────────────────────────────────────────── */
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      hideError();
 
       const identifier = $id("email").value.trim();
       const password = $id("password").value;
 
       const checked = classifyLoginId(identifier);
-      if (!checked.ok) return showError(checked.message);
-      if (!password) return showError("Please enter your password.");
+      if (!checked.ok) return showToast(checked.message, "warning");
+      if (!password) return showToast("Please enter your password.", "warning");
 
       loader.style.display = "flex";
 
       try {
-        // Signs in, resolves the role and redirects to the student dashboard.
-        // Loader stays visible until the redirect happens.
         await handlePhoneLogin(identifier, password);
       } catch (error) {
         loader.style.display = "none";
-        showError(error.message);
+        showToast(error.message, "error");
+      }
+    });
+
+    /* ── Terms & Conditions (Pop-up Modal with compulsory scroll unlock) ── */
+    const SIGNUP_TERMS = {
+      en: [
+        { title: "1. Non-Refundable & Non-Transferable Fees", desc: "All membership fees once paid are strictly non-refundable, non-transferable, and non-extendable under any circumstances except at management's sole discretion." },
+        { title: "2. Seat Allocation & Reservation", desc: "Seat bookings are subject to document verification and library management approval. Seat numbers are allocated strictly based on selected plan availability." },
+        { title: "3. Strict Study Hall Silence", desc: "Absolute pin-drop silence must be maintained in the study hall at all times. Group discussions, talking, and whispering are strictly prohibited." },
+        { title: "4. Outside Footwear Prohibited", desc: "Outside footwear (shoes, sandals) is strictly prohibited inside the study hall. Members must keep their designated desk clean and organized." },
+        { title: "5. Mobile Phone Discipline", desc: "Mobile phones must be kept on 100% silent mode (not even vibration). Attending phone calls inside the study area is strictly prohibited; use designated areas only." },
+        { title: "6. Food & Beverages Restrictions", desc: "Eating meals, snacks, or outside food inside the reading hall is prohibited. Water bottles are allowed. Refreshments are permitted only in designated areas." },
+        { title: "7. Personal Belongings Responsibility", desc: "Students are solely responsible for their personal belongings (laptops, books, chargers, cash). Management accepts no responsibility for lost or unattended items." },
+        { title: "8. Care for Library Property & Facilities", desc: "Handle library assets, desks, chairs, AC units, and charging sockets with care. Any damage caused will be charged to the student and may result in immediate expulsion." },
+        { title: "9. Document Verification & Admission Rights", desc: "Management reserves the right to verify identity documents (Aadhaar Card) and cancel admission without refund if the code of conduct is violated." },
+        { title: "10. Governing Law & Jurisdiction", desc: "These terms are governed by the laws of India. Any disputes shall be subject to the exclusive jurisdiction of the competent courts in Bhavnagar, Gujarat." }
+      ],
+      gu: [
+        { title: "૧. બિન-રિફંડેબલ અને અ-બદલીપાત્ર ફી", desc: "એકવાર ચૂકવેલ સભ્યપદ ફી કોઈપણ સંજોગોમાં પરત (Non-refundable), ટ્રાન્સફર (Non-transferable) કે મુદત વધારી (Non-extendable) શકાશે નહીં." },
+        { title: "૨. સીટ ફાળવણી અને અનામત", desc: "સીટ બુકિંગ મેનેજમેન્ટની ચકાસણી અને મંજૂરીને આધીન છે. સીટ પસંદ કરેલ પ્લાનની ઉપલબ્ધતા મુજબ જ ફાળવવામાં આવશે." },
+        { title: "૩. અભ્યાસ ખંડમાં સંપૂર્ણ શાંતિ", desc: "સ્ટડી હોલમાં હંમેશા સંપૂર્ણ શાંતિ જાળવવી ફરજિયાત છે. અંદરોઅંદર વાતચીત, ચર્ચા કે ધીમેથી બોલવાની પણ સખત મનાઈ છે." },
+        { title: "૪. બહારના પગરખાં પર પ્રતિબંધ", desc: "અભ્યાસ ખંડની અંદર બહારના પગરખાં (બૂટ/ચંપલ) પહેરીને પ્રવેશવાની સખત મનાઈ છે. ડેસ્ક અને લાઈબ્રેરી પરિસર સ્વચ્છ રાખવું." },
+        { title: "૫. મોબાઇલ ફોન અને કોલ્સ નિયમ", desc: "મોબાઇલ ફોન ૧૦૦% સાયલન્ટ મોડ પર રાખવો (વાઇબ્રેશન પણ નહીં). હોલની અંદર ફોન ઉપાડવાની સખત મનાઈ છે; કોલ માટે નિયત લોબી/બાલ્કનીનો જ ઉપયોગ કરવો." },
+        { title: "૬. ખાનપાન પર પ્રતિબંધ", desc: "અભ્યાસ ખંડમાં નાસ્તો, જમવાનું કે બહારનો ખોરાક ખાવાની સખત મનાઈ છે. માત્ર પાણીની બોટલ રાખવાની છૂટ છે. નાસ્તા માટે ટેરેસ/રીફ્રેશમેન્ટ એરિયાનો ઉપયોગ કરવો." },
+        { title: "૭. વ્યક્તિગત સામાનની સુરક્ષા", desc: "પોતાના લેપટોપ, પુસ્તકો, ચાર્જર અને અંગત સામાનની સંપૂર્ણ જવાબદારી વિદ્યાર્થીની પોતાની રહેશે. ચોરી કે નુકસાન માટે મેનેજમેન્ટ જવાબદાર રહેશે નહીં." },
+        { title: "૮. મિલકત અને ઇલેક્ટ્રિકલ જાળવણી", desc: "ફર્નિચર, લાઇટ, પંખા, એસી અને ચાર્જિંગ પોઇન્ટ્સનો કાળજીપૂર્વક ઉપયોગ કરવો. કોઈપણ નુકસાન બદલ દંડ થશે અને સભ્યપદ રદ થઈ શકે છે." },
+        { title: "૯. દસ્તાવેજ ચકાસણી અને અધિકાર", desc: "ઓળખ કાર્ડ (આધાર કાર્ડ) ની ચકાસણી કરવાનો અને ગેરવર્તણૂક જણાયે કોઈપણ રિફંડ વિના સભ્યપદ રદ કરવાનો અંતિમ અધિકાર મેનેજમેન્ટનો રહેશે." },
+        { title: "૧૦. કાયદાકીય ક્ષેત્રાધિકાર", desc: "આ નિયમો ભારતના કાયદાઓ દ્વારા સંચાલિત છે. કોઈપણ વિવાદ ભાવનગર, ગુજરાતની સક્ષમ અદાલતોના અધિકારક્ષેત્ર હેઠળ રહેશે." }
+      ]
+    };
+
+    let signupTermsLang = "en";
+    let signupTermsScrolled = false;
+
+    /* ── Real-time Mobile Check, Email Check & Form State ─────────────── */
+    const isSignupFormFilled = () => {
+      const name = ($id("su-name")?.value || "").trim();
+      const phoneDigits = ($id("su-phone")?.value || "").replace(/\D/g, "");
+      const email = ($id("su-email")?.value || "").trim();
+      const password = $id("su-password")?.value || "";
+      const confirm = $id("su-confirm")?.value || "";
+
+      const phoneOk = phoneDigits.length === 10;
+      const emailOk = EMAIL_RE.test(email);
+      const pwOk = password.length >= 6 && password === confirm;
+
+      return Boolean(name && phoneOk && emailOk && pwOk);
+    };
+
+    const updateSignupValidationState = () => {
+      const phoneEl = $id("su-phone");
+      const phoneDigits = (phoneEl?.value || "").replace(/\D/g, "");
+      const phoneHint = $id("su-phone-hint");
+      const phoneIcon = $id("su-phone-icon");
+
+      if (phoneHint && phoneEl) {
+        if (!phoneDigits) {
+          phoneHint.innerHTML = "10-digit mobile number for portal access";
+          phoneHint.style.color = "#64748b";
+          if (phoneIcon) phoneIcon.style.display = "none";
+        } else if (phoneDigits.length < 10) {
+          phoneHint.innerHTML = `${ALERT_SVG} <span style="color:#d97706;font-weight:600;">Enter 10-digit mobile number (${10 - phoneDigits.length} digits left)</span>`;
+          if (phoneIcon) phoneIcon.style.display = "none";
+        } else {
+          phoneHint.innerHTML = `${CHECK_SVG} <span style="color:#059669;font-weight:600;">Valid 10-digit mobile number</span>`;
+          if (phoneIcon) {
+            phoneIcon.innerHTML = CHECK_SVG;
+            phoneIcon.style.display = "flex";
+          }
+        }
+      }
+
+      const emailEl = $id("su-email");
+      const emailVal = (emailEl?.value || "").trim();
+      const emailHint = $id("su-email-hint");
+      const emailIcon = $id("su-email-icon");
+
+      if (emailHint && emailEl) {
+        if (!emailVal) {
+          emailHint.innerHTML = "Valid email address for receipts &amp; notifications";
+          emailHint.style.color = "#64748b";
+          if (emailIcon) emailIcon.style.display = "none";
+        } else if (!EMAIL_RE.test(emailVal)) {
+          emailHint.innerHTML = `${ALERT_SVG} <span style="color:#d97706;font-weight:600;">Please enter a valid email address</span>`;
+          if (emailIcon) emailIcon.style.display = "none";
+        } else {
+          emailHint.innerHTML = `${CHECK_SVG} <span style="color:#059669;font-weight:600;">Valid email address format</span>`;
+          if (emailIcon) {
+            emailIcon.innerHTML = CHECK_SVG;
+            emailIcon.style.display = "flex";
+          }
+        }
+      }
+
+      const pwEl = $id("su-password");
+      const pwVal = pwEl?.value || "";
+      const pwHint = $id("su-pw-hint");
+      if (pwHint && pwEl) {
+        if (!pwVal) {
+          pwHint.innerHTML = "At least 6 characters";
+          pwHint.style.color = "#94a3b8";
+        } else if (pwVal.length < 6) {
+          pwHint.innerHTML = `${ALERT_SVG} <span style="color:#d97706;font-weight:600;">Password must be at least 6 characters (${6 - pwVal.length} more)</span>`;
+        } else {
+          pwHint.innerHTML = `${CHECK_SVG} <span style="color:#059669;font-weight:600;">Password length met</span>`;
+        }
+      }
+
+      const confirmEl = $id("su-confirm");
+      const confirmVal = confirmEl?.value || "";
+      const confirmHint = $id("su-confirm-hint");
+      if (confirmHint && confirmEl) {
+        if (!confirmVal) {
+          confirmHint.innerHTML = "";
+        } else if (pwVal && confirmVal !== pwVal) {
+          confirmHint.innerHTML = `${ALERT_SVG} <span style="color:#d97706;font-weight:600;">Passwords do not match</span>`;
+        } else if (pwVal && confirmVal === pwVal && pwVal.length >= 6) {
+          confirmHint.innerHTML = `${CHECK_SVG} <span style="color:#059669;font-weight:600;">Passwords match</span>`;
+        }
+      }
+
+      const sub = $id("su-terms-subtext");
+      const chk = $id("su-terms-accept");
+      if (sub) {
+        if (chk && chk.checked) {
+          sub.innerHTML = `${CHECK_SVG} <span style="color:#059669;font-weight:600;">${signupTermsLang === "gu" ? "નિયમો વાંચીને સ્વીકારવામાં આવ્યા છે" : "Terms reviewed and accepted"}</span>`;
+        } else if (isSignupFormFilled()) {
+          sub.textContent = signupTermsLang === "gu" ? "નિયમો વાંચીને સંમતિ આપવા માટે ક્લિક કરો *" : "Please review and accept the Terms & Conditions *";
+          sub.style.color = "#d97706";
+        } else {
+          sub.textContent = signupTermsLang === "gu" ? "નિયમો જોવા માટે ઉપરની વિગતો પૂર્ણ કરવી ફરજિયાત છે *" : "Complete required form details above to unlock agreement *";
+          sub.style.color = "#64748b";
+        }
+      }
+    };
+
+    // Sanitize mobile input to 10 digits max
+    $id("su-phone")?.addEventListener("input", (e) => {
+      let d = String(e.target.value || "").replace(/\D/g, "");
+      if (d.length > 10) {
+        if (d.startsWith("91") && d.length <= 12) d = d.slice(-10);
+        else if (d.startsWith("0") && d.length === 11) d = d.slice(-10);
+        else d = d.slice(0, 10);
+      }
+      e.target.value = d;
+      updateSignupValidationState();
+    });
+
+    ["su-name", "su-email", "su-password", "su-confirm"].forEach((id) => {
+      $id(id)?.addEventListener("input", updateSignupValidationState);
+    });
+
+    const openSignupTermsModal = () => {
+      if (!isSignupFormFilled()) {
+        showToast(signupTermsLang === "gu"
+          ? "નિયમો અને શરતો જોવા માટે કૃપા કરીને પહેલા તમારું પૂરું નામ, ૧૦ અંકનો મોબાઈલ, ઇમેઇલ અને પાસવર્ડ દાખલ કરો."
+          : "Please enter your Name, valid 10-digit Mobile, Email, and Password above before reviewing Terms & Conditions.", "warning");
+        return;
+      }
+      const modal = $id("su-terms-modal");
+      if (modal) {
+        modal.style.display = "flex";
+        renderSignupTerms(signupTermsLang);
+      }
+    };
+
+    const closeSignupTermsModal = () => {
+      const modal = $id("su-terms-modal");
+      if (modal) modal.style.display = "none";
+    };
+
+    const renderSignupTerms = (lang) => {
+      signupTermsLang = lang;
+      const box = $id("su-modal-terms-box");
+      const title = $id("su-modal-title");
+      const sub = $id("su-modal-subtitle");
+      const btnEn = $id("su-terms-lang-en");
+      const btnGu = $id("su-terms-lang-gu");
+      const badgeText = $id("su-modal-badge-text");
+      const acceptText = $id("su-modal-accept-text");
+      const cancelBtn = $id("su-modal-cancel-btn");
+
+      if (btnEn && btnGu) {
+        btnEn.style.background = lang === "en" ? "#059669" : "transparent";
+        btnEn.style.color = lang === "en" ? "#fff" : "#64748b";
+        btnGu.style.background = lang === "gu" ? "#059669" : "transparent";
+        btnGu.style.color = lang === "gu" ? "#fff" : "#64748b";
+      }
+
+      if (title) {
+        title.textContent = lang === "gu" ? "નિયમો અને શરતો" : "Terms & Conditions";
+      }
+      if (sub) {
+        sub.textContent = lang === "gu" ? "શ્રીજી રીડિંગ લાઇબ્રેરી · ભાવનગર" : "Shreeji Reading Library · Bhavnagar";
+      }
+      if (cancelBtn) {
+        cancelBtn.textContent = lang === "gu" ? "બંધ કરો" : "Close";
+      }
+      if (acceptText) {
+        acceptText.textContent = lang === "gu" ? "હું નિયમો સ્વીકારું છું" : "I Accept the Terms";
+      }
+
+      if (badgeText && !signupTermsScrolled) {
+        badgeText.textContent = lang === "gu"
+          ? "સંમતિ આપવા માટે કૃપા કરીને સંપૂર્ણ નિયમો નીચે સુધી વાંચો *"
+          : "Please scroll through and review the complete terms to enable acceptance *";
+      }
+
+      if (box) {
+        box.innerHTML = SIGNUP_TERMS[lang].map((item) => `
+          <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #f1f5f9;">
+            <div style="font-weight: 700; color: #0f172a; margin-bottom: 3px; font-size: 12.5px;">${item.title}</div>
+            <div style="color: #475569; font-size: 11.5px; line-height: 1.55;">${item.desc}</div>
+          </div>
+        `).join("") + `
+          <div style="text-align: center; font-size: 11px; font-weight: 600; color: #94a3b8; padding-top: 8px;">
+            ${lang === "gu" ? "— તમામ નિયમો અને શરતો સમાપ્ત —" : "— End of Terms & Conditions —"}
+          </div>`;
+      }
+
+      setTimeout(() => {
+        if (box && box.scrollHeight <= box.clientHeight + 20) {
+          unlockSignupTerms();
+        }
+      }, 60);
+    };
+
+    const unlockSignupTerms = () => {
+      signupTermsScrolled = true;
+      const badge = $id("su-modal-badge");
+      const badgeText = $id("su-modal-badge-text");
+      const acceptBtn = $id("su-modal-accept-btn");
+
+      if (badge) {
+        badge.style.background = "#dcfce7";
+        badge.style.color = "#166534";
+        badge.style.borderColor = "#86efac";
+      }
+      if (badgeText) {
+        badgeText.textContent = signupTermsLang === "gu"
+          ? "તમે સંપૂર્ણ નિયમો વાંચી લીધા છે. હવે તમે નીચે સંમતિ આપી શકો છો."
+          : "You have reviewed the complete terms. You may now accept below.";
+      }
+      if (acceptBtn) {
+        acceptBtn.disabled = false;
+        acceptBtn.style.opacity = "1";
+        acceptBtn.style.cursor = "pointer";
+      }
+    };
+
+    const suModalBox = $id("su-modal-terms-box");
+    if (suModalBox) {
+      suModalBox.addEventListener("scroll", (e) => {
+        const el = e.currentTarget;
+        if (el.scrollHeight - el.scrollTop <= el.clientHeight + 25) {
+          unlockSignupTerms();
+        }
+      });
+    }
+
+    $id("su-terms-lang-en")?.addEventListener("click", () => renderSignupTerms("en"));
+    $id("su-terms-lang-gu")?.addEventListener("click", () => renderSignupTerms("gu"));
+    $id("su-modal-close-btn")?.addEventListener("click", closeSignupTermsModal);
+    $id("su-modal-cancel-btn")?.addEventListener("click", closeSignupTermsModal);
+    $id("su-open-terms-btn")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      openSignupTermsModal();
+    });
+
+    $id("su-modal-accept-btn")?.addEventListener("click", () => {
+      signupTermsScrolled = true;
+      const chk = $id("su-terms-accept");
+      if (chk) chk.checked = true;
+      updateSignupValidationState();
+      closeSignupTermsModal();
+    });
+
+    $id("su-terms-accept")?.addEventListener("click", (e) => {
+      if (!isSignupFormFilled()) {
+        e.preventDefault();
+        e.target.checked = false;
+        showToast(signupTermsLang === "gu"
+          ? "નિયમો અને શરતો જોવા માટે કૃપા કરીને પહેલા તમારું પૂરું નામ, ૧૦ અંકનો મોબાઈલ, ઇમેઇલ અને પાસવર્ડ દાખલ કરો."
+          : "Please enter your Name, valid 10-digit Mobile, Email, and Password above before reviewing Terms & Conditions.", "warning");
+        return;
+      }
+      if (!signupTermsScrolled) {
+        e.preventDefault();
+        openSignupTermsModal();
+      } else {
+        updateSignupValidationState();
       }
     });
 
     /* ── Sign up submit ─────────────────────────────────────────────── */
     signupForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      hideError();
 
       const name = $id("su-name").value.trim();
-      const identifier = $id("su-identifier").value.trim();
+      const phone = ($id("su-phone").value || "").replace(/\D/g, "");
+      const email = $id("su-email").value.trim().toLowerCase();
       const password = $id("su-password").value;
       const confirm = $id("su-confirm").value;
 
-      if (!name) return showError("Please enter your full name.");
-      if (!identifier) return showError("Please enter your mobile number or email.");
-      const checked = classifyLoginId(identifier);
-      if (!checked.ok) return showError(checked.message);
-      if (password.length < 6) return showError("Password must be at least 6 characters.");
-      if (password !== confirm) return showError("Passwords do not match.");
+      if (!name) return showToast("Please enter your full name.", "warning");
+      if (phone.length !== 10) return showToast("Please enter a valid 10-digit mobile number.", "warning");
+      if (!EMAIL_RE.test(email)) return showToast("Please enter a valid email address.", "warning");
+      if (password.length < 6) return showToast("Password must be at least 6 characters.", "warning");
+      if (password !== confirm) return showToast("Passwords do not match.", "warning");
+
+      // Strict Terms & Conditions enforcement
+      const chkTerms = $id("su-terms-accept");
+      if (!signupTermsScrolled || !chkTerms || !chkTerms.checked) {
+        openSignupTermsModal();
+        return showToast(signupTermsLang === "gu"
+          ? "એકાઉન્ટ બનાવવા માટે કૃપા કરીને નિયમો અને શરતો ધ્યાનપૂર્વક વાંચીને સ્વીકારો."
+          : "Please read and accept the Terms & Conditions to create your account.", "warning");
+      }
 
       const btn = $id("btn-signup");
       const label = btn.textContent;
@@ -603,22 +1089,18 @@
       btn.textContent = "Checking…";
       loader.style.display = "flex";
 
-      // Friendly duplicate hint before creating anything (authoritative check
-      // still runs inside completeSignup — nothing here deletes or skips it).
-      const dupeHint = await checkSignupNotDuplicate(checked);
+      const dupeHint = await checkSignupNotDuplicate({ phone, email });
       if (dupeHint) {
         loader.style.display = "none";
         btn.disabled = false;
         btn.textContent = label;
-        return showError(dupeHint);
+        return showToast(dupeHint, "warning");
       }
       btn.textContent = "Creating account…";
 
       try {
-        // Creates the Auth account first, then writes users/{uid} and
-        // students/{uid} in ONE transaction. See onboardingService.js.
         const { completeSignup } = await import("./services/onboardingService.js");
-        const res = await completeSignup({ identifier, password, name });
+        const res = await completeSignup({ identifier: phone, phone, email, password, name });
         localStorage.setItem("userRole", "Student");
         localStorage.setItem("userId", res.uid);
         window.location.href = "/student/dashboard.html";
@@ -626,16 +1108,11 @@
         loader.style.display = "none";
         btn.disabled = false;
         btn.textContent = label;
-        showError(err.message || "Could not create the account.");
+        showToast(err.message || "Could not create the account.", "error");
       }
     });
 
-    /* ── Deep-link + website hand-off ─────────────────────────────────
-       ?tab=signup (or #signup) opens the Create account tab directly.
-       The booking form on www.shreejilibrary.co.in is a DIFFERENT origin,
-       so it carries the visitor's details in the URL HASH
-       (#name=…&phone=…&email=…), which is never sent to the server — the
-       fields are simply pre-filled so nobody types the same thing twice. */
+    /* ── Deep-link + website hand-off ───────────────────────────────── */
     const readHashPrefill = () => {
       const out = {};
       const raw = String(window.location.hash || "").replace(/^#/, "");
@@ -659,15 +1136,18 @@
 
     if (wantsSignup || hasPrefill) {
       setTab("signup", false);
-      if (prefill.name && !$id("su-name").value) $id("su-name").value = prefill.name;
-      const idEl = $id("su-identifier");
-      if (idEl && !idEl.value) {
-        const rawId = prefill.phone || prefill.mobile || prefill.email || prefill.identifier || "";
-        const digits = String(rawId).replace(/\D/g, "");
-        idEl.value = digits.length === 10 ? digits : rawId;
+      if (prefill.name && $id("su-name") && !$id("su-name").value) $id("su-name").value = prefill.name;
+      const phoneVal = prefill.phone || prefill.mobile || (!prefill.identifier?.includes("@") ? prefill.identifier : "") || "";
+      if (phoneVal && $id("su-phone")) {
+        const digits = String(phoneVal).replace(/\D/g, "");
+        $id("su-phone").value = digits.slice(-10);
       }
-      // Drop the hand-off payload once read so it does not sit in the
-      // address bar / browser history for the rest of the session.
+      const emailVal = prefill.email || (prefill.identifier?.includes("@") ? prefill.identifier : "") || "";
+      if (emailVal && $id("su-email")) {
+        $id("su-email").value = emailVal.trim();
+      }
+      updateSignupValidationState();
+
       if (window.location.hash && window.location.hash !== "#signup") {
         const url = new URL(window.location.href);
         history.replaceState(null, "", url.pathname + url.search);
@@ -678,7 +1158,7 @@
 
     if (params.get("registered") === "1") {
       setTab("signin", false);
-      showError("Account created successfully! Please sign in.", true);
+      showToast("Account created successfully! Please sign in.", "success");
     }
 
     if ('serviceWorker' in navigator) {
