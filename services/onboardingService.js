@@ -173,39 +173,24 @@ export const findAdoptableRecord = async ({ phone, email, uid }) => {
  *
  * @returns {Promise<{uid, studentId, adopted, authEmail}>}
  */
-export const completeSignup = async ({ identifier, password, name, phone: explicitPhone, email: explicitEmail }) => {
+export const completeSignup = async ({ identifier, password, name }) => {
+  const raw = String(identifier || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  const isPhone = !raw.includes("@") && digits.length === 10;
+
   let phone = "";
   let email = "";
-
-  if (explicitPhone) {
-    const digits = String(explicitPhone).replace(/\D/g, "");
+  if (isPhone) {
     if (!isValidPhone(digits)) throw new Error("Please enter a valid 10-digit mobile number.");
     phone = normalizePhone(digits);
-  }
-  if (explicitEmail) {
-    const rawEmail = String(explicitEmail).trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
-      throw new Error("Please enter a valid email address.");
+    email = "";
+  } else {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+      throw new Error("Please enter a valid email address or a 10-digit mobile number.");
     }
-    email = rawEmail;
+    email = raw.toLowerCase();
   }
 
-  if (!phone && !email) {
-    const raw = String(identifier || "").trim();
-    const digits = raw.replace(/\D/g, "");
-    const isRawPhone = !raw.includes("@") && digits.length === 10;
-    if (isRawPhone) {
-      if (!isValidPhone(digits)) throw new Error("Please enter a valid 10-digit mobile number.");
-      phone = normalizePhone(digits);
-    } else {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
-        throw new Error("Please enter a valid email address or a 10-digit mobile number.");
-      }
-      email = raw.toLowerCase();
-    }
-  }
-
-  const isPhone = Boolean(phone);
   const authEmail = isPhone ? phoneToAuthEmail(phone) : email;
 
   // 1) Auth account first — this is what makes login possible at all.
