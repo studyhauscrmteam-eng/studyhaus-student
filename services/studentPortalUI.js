@@ -162,13 +162,14 @@ export function isSubscriptionExpired(s) {
   if (s.status === "Inactive" || s.status === "Expired" || s.status === "Old" || s.status === "Old Student") {
     return true;
   }
-  const dueDateStr = s.paymentDueDate || s.endDate;
-  if (!dueDateStr) return false;
-  const due = new Date(dueDateStr);
-  if (isNaN(due.getTime())) return false;
-  due.setHours(23, 59, 59, 999);
+  // Subscription expiration depends on genuine subscription endDate (or plannedExitDate)
+  const endDateStr = s.endDate || s.plannedExitDate || s.paymentDueDate;
+  if (!endDateStr) return false;
+  const end = new Date(endDateStr);
+  if (isNaN(end.getTime())) return false;
+  end.setHours(23, 59, 59, 999);
   const now = new Date();
-  return due < now;
+  return end < now;
 }
 
 export const initStudentPortalUI = () => {
@@ -1661,7 +1662,7 @@ const renderPortal = () => {
       } else if (p.renewalPeriod != null && p.renewalPeriod !== "") {
         pPeriod = `${p.renewalPeriod} Mo.`;
       }
-      if (p.source === "onboarding" || p.source === "admission") pPeriod = s.startDate ? `${s.startDate} to ${s.paymentDueDate || s.endDate || "—"}` : "Admission";
+      if (p.source === "onboarding" || p.source === "admission") pPeriod = s.startDate ? `${s.startDate} to ${s.endDate || s.plannedExitDate || s.paymentDueDate || "—"}` : "Admission";
       const pTxn = p.transactionId || "—";
       const pStatus = String(p.status || "pending").toUpperCase();
       const proofUrl = resolveRecordProof(p, s);
@@ -1735,7 +1736,7 @@ const renderPortal = () => {
       id: "initial-admission-renewal",
       newPlan: s.planName || "Regular Fixed Premium",
       startDate: s.startDate || "—",
-      endDate: s.paymentDueDate || s.endDate || "—",
+      endDate: s.endDate || s.plannedExitDate || s.paymentDueDate || "—",
       amount: realAmt,
       paymentMethod: renMethod,
       transactionId: isPayLater ? (s.transactionId || "PAY LATER") : (isCash ? (s.transactionId || "CASH") : (s.transactionId || "ADMISSION")),
