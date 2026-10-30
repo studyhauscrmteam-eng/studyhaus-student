@@ -65,7 +65,7 @@ const resolveUserRole = async (user) => {
     // 3. Self-heal — create/adopt the record rather than refusing the login.
     if (!userDoc) {
       try {
-        const { ensureStudentRecord } = await import("../services/onboardingService.js");
+        const { ensureStudentRecord } = await import("../services/onboardingService.js?v=2");
         docId = await ensureStudentRecord();
         userDoc = await retryWithBackoff(() => getDocument("students", docId));
       } catch (e) {

@@ -949,6 +949,7 @@ export const submitPaymentAndApplication = async (studentId, { paymentMethod, tr
         // the student doc + txn claim already succeeded above.
         console.warn("[onboarding] countable payment copy skipped:", payErr && payErr.message ? payErr.message : payErr);
       }
+    }
     // Alert admin immediately in notifications collection for pending admission approval
     try {
       const freshSnap = await getDoc(doc(db, "students", studentId)).catch(() => null);

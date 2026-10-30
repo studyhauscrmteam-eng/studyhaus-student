@@ -68,7 +68,7 @@ export const initAuthGuard = () => {
           // 3. Fallback: self-heal via ensureStudentRecord (for newly created student accounts)
           if (!userDoc) {
             try {
-              const { ensureStudentRecord } = await import("../services/onboardingService.js");
+              const { ensureStudentRecord } = await import("../services/onboardingService.js?v=2");
               docId = await ensureStudentRecord();
               userDoc = await retryWithBackoff(() => getDocument("students", docId));
             } catch (e) {

@@ -97,3 +97,7 @@ if (document.readyState === "loading") {
 }
 
 // console.log("Firebase setup complete. Guard active.");
+
+import { openReceiptModal, downloadReceiptPDF } from "./services/receiptService.js?v=3";
+window.openReceiptModal = openReceiptModal;
+window.downloadReceiptPDF = downloadReceiptPDF;

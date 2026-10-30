@@ -1,5 +1,5 @@
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, getDoc } from "firebase/firestore";
-import { db } from "../firebase/firebase.js";
+import { collection, query, where, onSnapshot, addDoc, setDoc, serverTimestamp, doc, updateDoc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase/firebase.js";
 import { validateTransactionId } from "./paymentValidation.js";
 
 // ===============================================
@@ -26,8 +26,12 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
       try { await validateTransactionId(cleanTxn); } catch (dupErr) { throw dupErr; }
     }
 
+    const currentUid = (auth && auth.currentUser) ? auth.currentUser.uid : (student.uid || student.id || "");
+
     const paymentData = {
-      studentId: student.id,
+      studentId: currentUid || student.id,
+      studentUid: currentUid || student.uid || student.id,
+      studentRefId: student.id || currentUid,
       studentName: student.name,
       planId: student.planId || "",
       planName: student.planName,
@@ -54,15 +58,132 @@ export const submitPaymentRequest = async (student, transactionId, renewalMonths
     // Store which specific month is being paid (for sequential overdue payments)
     if (monthLabel) paymentData.monthLabel = monthLabel; // e.g. "June 2026"
 
-    await addDoc(collection(db, "payments"), paymentData);
+    const docRef = await addDoc(collection(db, "payments"), paymentData);
+
+    // Record uniqueness claim for UPI payments
+    if (!isCash && cleanTxn !== "CASH" && currentUid) {
+      try {
+        const claimRef = doc(db, "uniqueness", "txn_" + cleanTxn.toLowerCase());
+        await setDoc(claimRef, {
+          kind: "transactionId",
+          uid: currentUid,
+          studentId: currentUid,
+          createdAt: serverTimestamp()
+        });
+      } catch (_) {}
+    }
     
-    return { success: true };
+    return { success: true, id: docRef.id };
   } catch (error) {
     return { success: false, error: error.message };
   }
 };
 
 
+
+
+/**
+ * Submits fee payment for a Pay Later admission/membership.
+ * Distinct from renewals: settles current admission fee rather than extending dates.
+ */
+export const submitPayLaterPayment = async (student, transactionId, amount, paymentMethod = "UPI", screenshot = "") => {
+  try {
+    const isCash = paymentMethod === "Cash" || paymentMethod === "Paid (Cash)";
+    const cleanTxn = isCash
+      ? (transactionId && String(transactionId).trim() ? String(transactionId).trim() : "CASH")
+      : String(transactionId || "").trim();
+
+    if (!isCash && (!cleanTxn || cleanTxn === "")) {
+      throw new Error("Transaction ID is required.");
+    }
+
+    let singleShot = typeof screenshot === "string" ? screenshot : (Array.isArray(screenshot) && screenshot.length ? screenshot[0] : "");
+    if (!isCash && (!singleShot || typeof singleShot !== "string" || !singleShot.startsWith("data:image/"))) {
+      throw new Error("Payment screenshot proof is required.");
+    }
+
+    if (!isCash && cleanTxn !== "CASH") {
+      try { await validateTransactionId(cleanTxn); } catch (dupErr) { throw dupErr; }
+    }
+
+    const currentUid = (auth && auth.currentUser) ? auth.currentUser.uid : (student.uid || student.id || "");
+    const sAmt = Number(amount) || Number(student.amount || student.planPrice || student.fee || 1000);
+
+    const paymentData = {
+      studentId: currentUid || student.id,
+      studentUid: currentUid || student.uid || student.id,
+      studentRefId: student.id || currentUid,
+      studentName: student.name || "Student",
+      studentPhone: student.phone || "",
+      planId: student.planId || "",
+      planName: student.planName || "Membership Admission",
+      amount: sAmt,
+      paymentMethod: isCash ? "Cash" : "UPI",
+      transactionId: cleanTxn,
+      screenshot: isCash ? "" : singleShot,
+      paymentScreenshotUrl: isCash ? "" : singleShot,
+      screenshots: (!isCash && singleShot) ? [singleShot] : [],
+      source: "pay_later",
+      status: "pending",
+      startDate: student.startDate || "",
+      endDate: student.endDate || student.paymentDueDate || "",
+      dueDateStr: student.endDate || student.paymentDueDate || "",
+      date: new Date().toISOString(),
+      createdAt: serverTimestamp()
+    };
+
+    const docRef = await addDoc(collection(db, "payments"), paymentData);
+
+    // Record uniqueness claim for UPI payments
+    if (!isCash && cleanTxn !== "CASH" && currentUid) {
+      try {
+        const claimRef = doc(db, "uniqueness", "txn_" + cleanTxn.toLowerCase());
+        await setDoc(claimRef, {
+          kind: "transactionId",
+          uid: currentUid,
+          studentId: currentUid,
+          createdAt: serverTimestamp()
+        });
+      } catch (_) {}
+    }
+
+    try {
+      const targetId = currentUid || student.id;
+      if (targetId) {
+        await updateDoc(doc(db, "students", targetId), {
+          pendingPayLaterPayment: true,
+          lastPayLaterPaymentId: docRef.id,
+          pendingPaymentMethod: isCash ? "Cash" : "UPI",
+          pendingTransactionId: cleanTxn,
+          updatedAt: serverTimestamp()
+        });
+      }
+      if (student.id && student.id !== targetId) {
+        await updateDoc(doc(db, "students", student.id), {
+          pendingPayLaterPayment: true,
+          lastPayLaterPaymentId: docRef.id,
+          pendingPaymentMethod: isCash ? "Cash" : "UPI",
+          pendingTransactionId: cleanTxn,
+          updatedAt: serverTimestamp()
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    try {
+      const { notifyAdmins } = await import("./notificationService.js");
+      await notifyAdmins({
+        type: "payment-pending",
+        title: "Pay Later Fee Submitted",
+        body: "Student " + (student.name || "Student") + " submitted " + (isCash ? "Cash" : "UPI") + " payment of Rs. " + sAmt + " for admission fee. Needs verification.",
+        studentId: currentUid || student.id
+      });
+    } catch (_) {}
+
+    return { success: true, id: docRef.id };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
 
 export const listenToMyPayments = (studentId, onUpdate, onError) => {
   if (!studentId) return () => {};
@@ -164,19 +285,43 @@ export const approvePayment = async (paymentId, approverName) => {
     const startStr = new Date(startDue).toISOString().split("T")[0];
     const newDueDateStr = endDue.toISOString().split("T")[0];
 
-    // 1. Update Student Due Date (additive — no other fields touched)
-    await updateDoc(studentRef, {
-      paymentDueDate: newDueDateStr,
+    // 1. Update Student Due Date & Status
+    const isPayLater = paymentData.source === "pay_later" ||
+      paymentData.source === "admission_pay_later" ||
+      String(studentData.paymentMethod || "").toLowerCase().includes("pay later") ||
+      studentData.isPayLater === true;
+    const studentUpdates = {
       status: "Active",
+      debt: 0,
       updatedAt: serverTimestamp()
-    });
+    };
+    if (isPayLater) {
+      studentUpdates.paymentMethod = paymentData.paymentMethod || "UPI";
+      studentUpdates.transactionId = paymentData.transactionId || "";
+      studentUpdates.isPayLater = false;
+      studentUpdates.pendingPayLaterPayment = false;
+      studentUpdates.paymentDueDate = studentData.endDate || newDueDateStr;
+    } else {
+      studentUpdates.paymentDueDate = newDueDateStr;
+    }
+    await updateDoc(studentRef, studentUpdates);
 
-    // 2. Update payment document to approved
-    await updateDoc(paymentRef, {
+    // 2. Update payment document with receipt number
+    let receiptNo = paymentData.receiptNo || "";
+    try {
+      const { getOrAssignReceiptNumber } = await import("./receiptService.js");
+      receiptNo = await getOrAssignReceiptNumber(paymentId, paymentData);
+    } catch (_) {}
+    const payUpdates = {
       status: "approved",
       approvedBy: approverName,
       approvalDate: serverTimestamp()
-    });
+    };
+    if (receiptNo) {
+      payUpdates.receiptNo = receiptNo;
+      payUpdates.invoiceNo = receiptNo;
+    }
+    await updateDoc(paymentRef, payUpdates);
 
     // 3. Mirror into renewals/ so Renewal History shows every approved
     // payment (onboarding first payment + renewals), not just manual ones.

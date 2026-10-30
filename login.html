@@ -1112,7 +1112,7 @@
       btn.textContent = "Creating account…";
 
       try {
-        const { completeSignup } = await import("./services/onboardingService.js");
+        const { completeSignup } = await import("./services/onboardingService.js?v=2");
         const res = await completeSignup({ identifier: phone, phone, email, password, name });
         localStorage.setItem("userRole", "Student");
         localStorage.setItem("userId", res.uid);
@@ -1190,7 +1190,7 @@
 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => {});
+        navigator.serviceWorker.register('./sw.js?v=2').catch(() => {});
       });
     }
   </script>

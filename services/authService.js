@@ -136,6 +136,7 @@ export const loginWithPhone = async (identifier, password) => {
 
     // If standard auth failed, check uniqueness for active provisioned Auth account (supports both phone and email logins)
     if (isAuthFail) {
+      let createdAnon = false;
       const cleanupAnon = async () => {
         if (createdAnon && auth.currentUser?.isAnonymous) {
           try {

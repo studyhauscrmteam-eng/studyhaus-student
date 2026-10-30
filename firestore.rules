@@ -28,7 +28,11 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
     function isOwnDoc() {
-      return signedIn() && resource.data.get('studentId', null) == request.auth.uid;
+      return signedIn() && (
+        resource.data.get('studentId', null) == request.auth.uid
+        || resource.data.get('studentUid', null) == request.auth.uid
+        || resource.data.get('uid', null) == request.auth.uid
+      );
     }
     // On UPDATE only police images this write actually changes, so a legacy
     // document that predates the cap can still receive non-image edits.
@@ -168,7 +172,12 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if isStaff() || isOwnDoc();
       allow create: if signedIn()
-        && (isStaff() || request.resource.data.get('studentId', null) == request.auth.uid)
+        && (
+          isStaff()
+          || request.resource.data.get('studentId', null) == request.auth.uid
+          || request.resource.data.get('studentUid', null) == request.auth.uid
+          || request.resource.data.get('uid', null) == request.auth.uid
+        )
         && request.resource.data.get('status', 'pending') in ['pending', 'approved', 'rejected'];
       allow update, delete: if isStaff();
     }

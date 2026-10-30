@@ -2,7 +2,7 @@ import { listenToStudentPortalData, updateStudentOwnProfile, submitProfileUpdate
 import { listenToMyAttendance, checkIn, checkOut } from "./attendanceService.js";
 import { calculateStudyHours } from "./studyHourCalculator.js";
 import { generateAttendancePDF, generateInvoicePDF } from "./pdfService.js";
-import { listenToMyPayments, submitPaymentRequest } from "./paymentService.js";
+import { listenToMyPayments, submitPaymentRequest, submitPayLaterPayment } from "./paymentService.js";
 import { openProofViewer } from "./proofViewer.js";
 import { changeUserPassword } from "./authService.js";
 import { auth } from "../firebase/firebase.js";
@@ -33,8 +33,8 @@ const compressPaymentScreenshot = (file) => new Promise((resolve, reject) => {
   img.src = url;
 });
 
-const collectPaymentScreenshot = async () => {
-  const input = document.getElementById("payment-ss");
+const collectPaymentScreenshot = async (inputId = "payment-ss") => {
+  const input = document.getElementById(inputId);
   if (!input || !input.files || !input.files.length || !input.files[0]) {
     throw new Error("Payment screenshot proof is required.");
   }
@@ -61,37 +61,45 @@ window.viewStudentProofModal = (dataUrl, title = "Payment Screenshot Proof") => 
 
 // Global E-Invoice download helper for students
 window.downloadStudentInvoice = async (id, planName, amount, date, mode, period, txnId) => {
-  const live = currentStudent || {};
+  const live = (typeof currentStudent !== "undefined" && currentStudent) ? currentStudent : {};
+  const isRecordPayLater = String(mode || "").toLowerCase().includes("pay later") ||
+    String(txnId || "").toUpperCase() === "PAY LATER";
+  const isLivePayLater = !mode && (
+    String(live.paymentMethod || "").toLowerCase().includes("pay later") ||
+    String(live.status || "").toLowerCase().includes("pay later") ||
+    String(live.status || "").toLowerCase().includes("pay_later") ||
+    String(live.transactionId || "").toUpperCase() === "PAY LATER"
+  );
+  if (isRecordPayLater || isLivePayLater) {
+    if (window.showToast) window.showToast("Cannot generate invoice for unpaid (Pay Later) records.", "warning");
+    return;
+  }
   try {
-    if (window.showToast) window.showToast("Generating e-invoice PDF...", "info");
-    const cleanId = id ? String(id).replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase() : Date.now().toString().slice(-8);
-    const authEmail = auth?.currentUser?.email;
-    const cleanLiveEmail = (live.email && !live.email.endsWith("@student.shreejilibrary.com")) ? live.email : "";
-    const cleanAuthEmail = (authEmail && !authEmail.endsWith("@student.shreejilibrary.com")) ? authEmail : "";
-    const realEmail = cleanLiveEmail || (live.personalEmail && !live.personalEmail.endsWith("@student.shreejilibrary.com") ? live.personalEmail : "") || cleanAuthEmail || "";
-    const res = await generateInvoicePDF({
-      invoiceNo: `INV-${cleanId}`,
-      date: date || new Date().toLocaleDateString('en-GB'),
+    const payload = {
+      id,
+      planName: planName || live.planName,
+      amount: amount || live.fee || 0,
+      date,
+      paymentMethod: mode || live.paymentMethod || "UPI",
+      mode: mode || live.paymentMethod || "UPI",
+      period,
+      transactionId: txnId || live.transactionId || "",
+      studentId: live.id || live.studentId || live.admissionNo || "—",
+      studentNo: live.studentId || live.admissionNo || "",
       studentName: live.name || "Student",
-      studentId: live.studentId || live.admissionNo || "—",
       studentPhone: live.phone || "—",
-      studentEmail: realEmail,
       seatNumber: live.seatNumber || live.seatAssigned || "",
-      seatFloor: live.seatFloor || live.floor || "",
-      planName: planName || live.planName || "Reading Membership",
-      period: period || "Monthly",
-      amount: amount || 0,
-      paymentMode: mode || live.paymentMethod || "UPI",
-      transactionId: txnId || live.transactionId || "—"
-    });
-    if (res && res.success) {
-      if (window.showToast) window.showToast("E-Invoice downloaded successfully!", "success");
+      seatFloor: live.seatFloor || live.floor || ""
+    };
+    if (typeof window.openReceiptModal === "function") {
+      await window.openReceiptModal(payload);
     } else {
-      if (window.showToast) window.showToast("Failed to generate invoice: " + (res?.error || "Unknown"), "error");
+      const { openReceiptModal } = await import("./receiptService.js?v=" + Date.now());
+      await openReceiptModal(payload);
     }
   } catch (err) {
     console.error("Download student invoice error:", err);
-    if (window.showToast) window.showToast("Error generating invoice: " + err.message, "error");
+    if (window.showToast) window.showToast("Error opening invoice: " + err.message, "error");
   }
 };
 
@@ -121,6 +129,249 @@ window.copyLibraryUpi = async () => {
     if (window.showToast) window.showToast("Failed to copy UPI ID", "error");
   }
 };
+
+export const isStudentPayLater = (s) => {
+  if (!s) return false;
+  const pm = String(s.paymentMethod || "").toLowerCase().trim();
+  const st = String(s.status || "").toLowerCase().trim();
+  const txn = String(s.transactionId || "").toUpperCase().trim();
+  return pm === "pay later" || pm === "paylater" || pm.includes("pay later") || st === "pay_later" || txn === "PAY LATER" || s.isPayLater === true;
+};
+
+window.openPayLaterModal = async () => {
+  const s = (typeof currentStudent !== "undefined" && currentStudent) ? currentStudent : null;
+  if (!s) {
+    if (window.showToast) window.showToast("Student profile not loaded.", "error");
+    return;
+  }
+
+  const prev = document.getElementById("pay-later-modal");
+  if (prev) prev.remove();
+
+  const amount = Number(s.amount || s.planPrice || s.fee || 1000);
+  const planName = s.planName || "Regular Fixed Seat";
+  const period = (s.startDate && (s.endDate || s.paymentDueDate))
+    ? (s.startDate + " to " + (s.endDate || s.paymentDueDate))
+    : "Current Membership";
+  const dueLabel = s.paymentDueDate
+    ? new Date(s.paymentDueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+    : "Immediate";
+
+  let qrSrc = "";
+  try {
+    const sets = await getSettings();
+    qrSrc = sets?.paymentQrUrl || sets?.qrCodeUrl || "";
+  } catch (_) {}
+  if (!qrSrc) {
+    const existingQr = document.querySelector(".payment-qr-img");
+    if (existingQr && existingQr.src) qrSrc = existingQr.src;
+  }
+
+  const modal = document.createElement("dialog");
+  modal.id = "pay-later-modal";
+  modal.className = "card";
+  modal.style.cssText = "border:none; border-radius:14px; padding:0; box-shadow:0 14px 40px rgba(0,0,0,0.45); background:var(--bg-card); color:var(--text-primary); width:min(560px, calc(100vw - 24px)); max-width:560px; margin:auto;";
+
+  modal.innerHTML = `
+    <div style="padding:1.15rem 1.4rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+      <div>
+        <h3 style="margin:0; font-size:1.15rem; font-weight:700; color:var(--text-primary);">Pay Outstanding Admission Fee</h3>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Settle your deferred Pay Later fee for current membership</div>
+      </div>
+      <button id="btn-pl-modal-close" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:var(--text-muted); line-height:1;">&times;</button>
+    </div>
+
+    <div style="padding:1.25rem 1.4rem;">
+      <div style="padding:12px 14px; background:var(--bg-hover); border:1px solid var(--border); border-radius:10px; margin-bottom:1.25rem; display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div>
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Membership Plan</div>
+          <div style="font-size:13.5px; font-weight:700; color:var(--text-primary); margin-top:2px;">${planName}</div>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Fee to Settle</div>
+          <div style="font-size:16px; font-weight:800; color:#16a34a; margin-top:2px;">₹${amount}</div>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Period</div>
+          <div style="font-size:12px; color:var(--text-secondary); margin-top:2px;">${period}</div>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Due Date</div>
+          <div style="font-size:12px; color:#ea580c; font-weight:700; margin-top:2px;">${dueLabel}</div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;">
+        <label style="font-size:12px; font-weight:800; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:6px;">Select Payment Method *</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <label id="lbl-pl-upi" style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:2px solid var(--primary); background:rgba(14,165,233,0.08); cursor:pointer; font-weight:600; font-size:13px;">
+            <input type="radio" name="pl-method" id="rad-pl-upi" value="UPI" checked style="accent-color:var(--primary);" />
+            <span>Pay Online (UPI)</span>
+          </label>
+          <label id="lbl-pl-cash" style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:2px solid var(--border); background:var(--bg-card); cursor:pointer; font-weight:600; font-size:13px;">
+            <input type="radio" name="pl-method" id="rad-pl-cash" value="Cash" style="accent-color:var(--primary);" />
+            <span>Pay with Cash</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="wrap-pl-upi" style="display:flex; flex-direction:column; gap:1rem;">
+        <div style="display:flex; gap:14px; align-items:center; background:var(--bg-card); border:1px solid var(--border); padding:12px; border-radius:10px;">
+          <div style="width:110px; height:110px; background:#fff; border-radius:8px; padding:4px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+            <img src="${qrSrc}" class="payment-qr-img" style="width:100%; height:100%; object-fit:contain;" alt="QR Code" />
+          </div>
+          <div style="flex:1;">
+            <div style="font-size:13px; font-weight:700; color:var(--text-primary); margin-bottom:4px;">Scan &amp; Pay via UPI</div>
+            <div style="font-size:12px; color:var(--text-secondary); line-height:1.4; margin-bottom:8px;">Scan with GPay, PhonePe, or Paytm and transfer ₹${amount}.</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window.downloadPaymentQr()" style="font-size:11px; padding:4px 8px; border:1px solid var(--border);">Download QR</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window.copyLibraryUpi()" style="font-size:11px; padding:4px 8px; border:1px solid var(--border);">Copy UPI ID</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">UPI 12-Digit Transaction ID (UTR) *</label>
+          <input type="text" id="inp-pl-txnid" class="sp-input" placeholder="Enter 12-digit UPI Txn ID" required style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); box-sizing:border-box;" />
+        </div>
+
+        <div>
+          <label style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Payment Screenshot Proof *</label>
+          <input type="file" id="inp-pl-ss" accept="image/*" class="sp-input" required style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border); box-sizing:border-box;" />
+          <small style="font-size:11px; color:var(--text-muted); display:block; margin-top:3px;">Upload clear screenshot proof showing amount and UTR.</small>
+        </div>
+      </div>
+
+      <div id="wrap-pl-cash" style="display:none; padding:1rem; border-radius:10px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3);">
+        <div style="display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px; color:#10b981; margin-bottom:4px;">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+          Cash Desk Payment
+        </div>
+        <div style="font-size:13px; color:var(--text-secondary); line-height:1.45;">
+          Please hand over the exact cash amount of <strong>₹${amount}</strong> to the receptionist at the front desk. Admin will verify and mark your payment as completed.
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:1.5rem;">
+        <button type="button" id="btn-pl-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="button" id="btn-pl-submit" class="btn btn-primary" style="background:#16a34a; border-color:#16a34a; color:#fff; font-weight:700; padding:10px 22px;">
+          Submit Fee Payment
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.showModal();
+
+  modal.querySelector("#btn-pl-modal-close").onclick = () => modal.close();
+  modal.querySelector("#btn-pl-cancel").onclick = () => modal.close();
+  modal.addEventListener("close", () => modal.remove());
+
+  const radUpi = modal.querySelector("#rad-pl-upi");
+  const radCash = modal.querySelector("#rad-pl-cash");
+  const lblUpi = modal.querySelector("#lbl-pl-upi");
+  const lblCash = modal.querySelector("#lbl-pl-cash");
+  const wrapUpi = modal.querySelector("#wrap-pl-upi");
+  const wrapCash = modal.querySelector("#wrap-pl-cash");
+
+  const syncMethod = () => {
+    const isCash = radCash.checked;
+    lblUpi.style.borderColor = !isCash ? "var(--primary)" : "var(--border)";
+    lblUpi.style.background = !isCash ? "rgba(14,165,233,0.08)" : "var(--bg-card)";
+    lblCash.style.borderColor = isCash ? "#16a34a" : "var(--border)";
+    lblCash.style.background = isCash ? "rgba(22,163,74,0.08)" : "var(--bg-card)";
+    wrapUpi.style.display = isCash ? "none" : "flex";
+    wrapCash.style.display = isCash ? "block" : "none";
+  };
+
+  radUpi.onchange = syncMethod;
+  radCash.onchange = syncMethod;
+
+  modal.querySelector("#btn-pl-submit").onclick = async () => {
+    const btn = modal.querySelector("#btn-pl-submit");
+    const isCash = radCash.checked;
+    const txnId = isCash ? "CASH" : (modal.querySelector("#inp-pl-txnid")?.value || "").trim();
+
+    if (!isCash && !txnId) {
+      if (window.showToast) window.showToast("Please enter your 12-digit UPI Transaction ID.", "error");
+      return;
+    }
+
+    let screenshot = "";
+    if (!isCash) {
+      btn.disabled = true;
+      btn.innerText = "Compressing screenshot...";
+      try {
+        screenshot = await collectPaymentScreenshot("inp-pl-ss");
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerText = "Submit Fee Payment";
+        if (window.showToast) window.showToast(err.message || "Payment screenshot is required.", "error");
+        return;
+      }
+      if (!screenshot) {
+        btn.disabled = false;
+        btn.innerText = "Submit Fee Payment";
+        if (window.showToast) window.showToast("Payment screenshot is required.", "error");
+        return;
+      }
+    }
+
+    btn.disabled = true;
+    btn.innerText = "Submitting...";
+
+    try {
+      const res = await submitPayLaterPayment(
+        s,
+        txnId,
+        amount,
+        isCash ? "Cash" : "UPI",
+        screenshot
+      );
+
+      if (res.success) {
+        if (window.showToast) {
+          window.showToast(
+            isCash
+              ? "Cash payment request submitted! Please pay at the front desk."
+              : "Payment submitted successfully! Waiting for admin approval.",
+            "success"
+          );
+        }
+        modal.close();
+
+        if (Array.isArray(currentPayments)) {
+          currentPayments.unshift({
+            id: res.id || ("pending-pl-" + Date.now()),
+            studentId: s.id,
+            studentName: s.name,
+            amount: amount,
+            paymentMethod: isCash ? "Cash" : "UPI",
+            transactionId: txnId,
+            screenshot: screenshot,
+            paymentScreenshotUrl: screenshot,
+            source: "pay_later",
+            status: "pending",
+            startDate: s.startDate || "",
+            endDate: s.endDate || s.paymentDueDate || "",
+            date: new Date().toISOString()
+          });
+          renderPortal();
+        }
+      } else {
+        btn.disabled = false;
+        btn.innerText = "Submit Fee Payment";
+        if (window.showToast) window.showToast("Submission failed: " + res.error, "error");
+      }
+    } catch (e) {
+      btn.disabled = false;
+      btn.innerText = "Submit Fee Payment";
+      if (window.showToast) window.showToast("Error: " + e.message, "error");
+    }
+  };
+};
+
 import { listenToMyComplaints, submitComplaint } from "./complaintService.js";
 import { listenToRenewalHistory } from "./renewalService.js";
 import { listenToMySeatRequests } from "./seatRequestService.js";
@@ -1441,10 +1692,16 @@ const renderPortal = () => {
 
   const pendingPayment = (Array.isArray(currentPayments) ? currentPayments : []).find(p => p.status === "pending");
   const latestRejectedPayment = (Array.isArray(currentPayments) ? currentPayments : []).find(p => p.status === "rejected" && (!pendingPayment || new Date(p.date || 0) > new Date(pendingPayment.date || 0)));
+  const pendingPayLaterPayment = (Array.isArray(currentPayments) ? currentPayments : []).find(p =>
+    p.status === "pending" && (p.source === "pay_later" || p.source === "admission" || p.source === "admission_pay_later")
+  );
+  const studentOwesPayLater = isStudentPayLater(s) && !pendingPayLaterPayment;
+  const dueLabel = s.paymentDueDate
+    ? new Date(s.paymentDueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "N/A";
 
   // If subscription was renewed by admin, show celebration toast
   if (window.__lastStudentExpiredState === true && !isExpired) {
-    if (window.showToast) window.showToast("🎉 Subscription Renewed! Platform access restored.", "success");
+    if (window.showToast) window.showToast("Subscription Renewed! Platform access restored.", "success");
   }
   window.__lastStudentExpiredState = isExpired;
 
@@ -1471,7 +1728,7 @@ const renderPortal = () => {
           b = document.createElement("span");
           b.className = "rn-lock-badge";
           b.style.cssText = "margin-left:auto; background:#dc2626; color:#fff; font-size:10px; font-weight:800; padding:2px 7px; border-radius:999px; text-transform:uppercase;";
-          b.textContent = "Renew 🔒";
+          b.textContent = "Renew (Locked)";
           navPay.appendChild(b);
         }
       }
@@ -1612,7 +1869,7 @@ const renderPortal = () => {
 
   // Payments generation
   let displayPayments = [...currentPayments];
-  const hasAdmissionPay = displayPayments.some(p => p.source === "onboarding" || p.source === "admission" || (p.transactionId && s.transactionId && p.transactionId === s.transactionId));
+  const hasAdmissionPay = displayPayments.some(p => p.source === "onboarding" || p.source === "admission" || p.source === "pay_later" || (p.transactionId && s.transactionId && p.transactionId === s.transactionId));
   if (!hasAdmissionPay && (s.paymentMethod || s.transactionId || s.paymentScreenshotUrl || studentDocProof || s.status === "Active" || s.approvalStatus === "Approved")) {
     const realAmt = resolveRecordAmount(null, s);
     const isPayLaterStudent = s.paymentMethod === "Pay Later";
@@ -1646,9 +1903,15 @@ const renderPortal = () => {
     paymentsHtml = `<tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No payment history.</td></tr>`;
   } else {
     displayPayments.forEach(p => {
+      const pmStr = String(p.paymentMethod || p.paymentMode || p.mode || "").toLowerCase();
+      const stStr = String(p.status || "").toLowerCase();
+      const isPayLater = pmStr.includes("pay later") || stStr.includes("pay later") || stStr.includes("pay_later") || String(p.transactionId || "").toUpperCase() === "PAY LATER" || p.isPayLater === true;
       let badgeClass = "badge-pending";
-      if (p.status === "approved" || p.status === "Completed") badgeClass = "badge-paid";
-      if (p.status === "rejected") badgeClass = "badge-absent";
+      let pStatus = isPayLater ? "PAY LATER" : String(p.status || "pending").toUpperCase();
+      if (!isPayLater) {
+        if (p.status === "approved" || p.status === "Completed") badgeClass = "badge-paid";
+        if (p.status === "rejected") badgeClass = "badge-absent";
+      }
       const pDate = p.date ? new Date(p.date).toLocaleDateString() : (s.startDate || "—");
       let pPeriod = p.monthLabel || "—";
       const monthsPart = (p.renewalMonths != null && p.renewalMonths !== "") ? Number(p.renewalMonths)
@@ -1663,8 +1926,7 @@ const renderPortal = () => {
         pPeriod = `${p.renewalPeriod} Mo.`;
       }
       if (p.source === "onboarding" || p.source === "admission") pPeriod = s.startDate ? `${s.startDate} to ${s.endDate || s.plannedExitDate || s.paymentDueDate || "—"}` : "Admission";
-      const pTxn = p.transactionId || "—";
-      const pStatus = String(p.status || "pending").toUpperCase();
+      const pTxn = isPayLater ? "PAY LATER" : (p.transactionId || "—");
       const proofUrl = resolveRecordProof(p, s);
       const proofCell = isValidImg(proofUrl)
         ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
@@ -1726,7 +1988,7 @@ const renderPortal = () => {
 
   // Renewals HTML Generation with Proof column, admission fallback, and strict deduplication
   let displayRenewals = [...currentRenewals];
-  const hasAdmissionRenewal = displayRenewals.some(r => r.source === "onboarding" || r.source === "admission" || (r.startDate && r.startDate === s.startDate));
+  const hasAdmissionRenewal = displayRenewals.some(r => r.source === "onboarding" || r.source === "admission" || r.source === "pay_later" || displayPayments.some(p => p.source === "pay_later") || (r.startDate && r.startDate === s.startDate));
   if (!hasAdmissionRenewal && (s.status === "Active" || s.approvalStatus === "Approved") && (s.startDate || s.paymentDueDate)) {
     const realAmt = resolveRecordAmount(null, s);
     const isPayLater = s.paymentMethod === "Pay Later";
@@ -1798,6 +2060,11 @@ const renderPortal = () => {
     const rTxn = String(r.transactionId || s.transactionId || "ADMISSION").trim().toUpperCase();
     const rMode = r.paymentMethod || r.paymentMode || r.mode || s.paymentMethod || "UPI";
     const rKey = `${rDate}_${rPeriod}_${rAmount}_${rTxn}`;
+    const isPayLater = String(rMode).toLowerCase().includes("pay later") || 
+      String(r.status || "").toLowerCase().includes("pay later") || 
+      String(r.status || "").toLowerCase().includes("pay_later") ||
+      rTxn === "PAY LATER" ||
+      r.isPayLater === true;
     if (!unifiedMap.has(rKey)) {
       unifiedMap.set(rKey, {
         id: r.id,
@@ -1805,21 +2072,35 @@ const renderPortal = () => {
         plan: r.newPlan || s.planName || "Membership Plan",
         period: rPeriod,
         amount: rAmount,
-        mode: rMode,
-        txnId: rTxn,
-        status: (r.status || "APPROVED").toUpperCase(),
+        mode: isPayLater ? "Pay Later" : rMode,
+        txnId: isPayLater ? "PAY LATER" : rTxn,
+        isPayLater: isPayLater,
+        status: isPayLater ? "PAY LATER" : (r.status || "APPROVED").toUpperCase(),
         proofUrl: resolveRecordProof(r, s)
       });
     }
   });
 
   displayPayments.forEach(p => {
+    if (p.source === "pay_later" || p.source === "admission_pay_later") {
+      // Clean up any stale unpaid Pay Later placeholders for this admission
+      for (const [key, val] of unifiedMap.entries()) {
+        if (val.isPayLater || String(val.txnId).toUpperCase() === "PAY LATER" || (val.id && String(val.id).startsWith("admission_"))) {
+          unifiedMap.delete(key);
+        }
+      }
+    }
     const pDate = p.date ? new Date(p.date).toLocaleDateString() : (s.startDate || "—");
     const pPeriod = p.monthLabel || "Admission";
     const pAmount = resolveRecordAmount(p, s);
     const pTxn = String(p.transactionId || "").trim().toUpperCase();
     const pMode = p.paymentMethod || p.paymentMode || p.mode || "UPI";
     const pKey = `${pDate}_${pPeriod}_${pAmount}_${pTxn}`;
+    const isPayLater = String(pMode).toLowerCase().includes("pay later") || 
+      String(p.status || "").toLowerCase().includes("pay later") || 
+      String(p.status || "").toLowerCase().includes("pay_later") ||
+      pTxn === "PAY LATER" ||
+      p.isPayLater === true;
 
     const isCovered = Array.from(unifiedMap.values()).some(u => 
       (pTxn && u.txnId && pTxn === u.txnId) ||
@@ -1834,9 +2115,10 @@ const renderPortal = () => {
         plan: p.planName || s.planName || "Admission",
         period: pPeriod,
         amount: pAmount,
-        mode: pMode,
-        txnId: pTxn || "—",
-        status: String(p.status || "approved").toUpperCase(),
+        mode: isPayLater ? "Pay Later" : pMode,
+        txnId: isPayLater ? "PAY LATER" : (pTxn || "—"),
+        isPayLater: isPayLater,
+        status: isPayLater ? "PAY LATER" : String(p.status || "approved").toUpperCase(),
         proofUrl: resolveRecordProof(p, s)
       });
     }
@@ -1849,17 +2131,30 @@ const renderPortal = () => {
     unifiedHistoryHtml = `<tr><td colspan="9" style="text-align:center; color: var(--text-muted); padding:2rem;">No payment or renewal history found.</td></tr>`;
   } else {
     unifiedItems.forEach(item => {
-      const isApproved = item.status === "APPROVED" || item.status === "COMPLETED";
-      const isRejected = item.status === "REJECTED";
-      const badgeClass = isApproved ? "badge-paid" : (isRejected ? "badge-absent" : "badge-pending");
+      const isPayLater = item.isPayLater || 
+        String(item.mode || "").toLowerCase().includes("pay later") || 
+        String(item.status || "").toLowerCase().includes("pay later") || 
+        String(item.status || "").toLowerCase().includes("pay_later") ||
+        String(item.txnId || "").toUpperCase() === "PAY LATER";
+      const isApproved = !isPayLater && (item.status === "APPROVED" || item.status === "COMPLETED");
+      const isRejected = !isPayLater && item.status === "REJECTED";
+      const badgeClass = isPayLater 
+        ? "badge-pending" 
+        : (isApproved ? "badge-paid" : (isRejected ? "badge-absent" : "badge-pending"));
+      const displayStatus = isPayLater ? "Pay Later" : item.status;
       const hasProof = isValidImg(item.proofUrl);
       const proofCell = hasProof
         ? `<button type="button" class="btn btn-ghost btn-sm" onclick="window.viewStudentProofModal('${item.proofUrl.replace(/'/g, "\\'")}', 'Payment Proof')" style="padding:3px 10px; font-size:12px; font-weight:600; color:var(--primary); border:1px solid var(--border); border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> Proof</button>`
         : `<span style="color:var(--text-muted); font-size:12px;">—</span>`;
 
-      const invoiceCell = isApproved
-        ? `<button type="button" class="btn btn-secondary btn-sm" onclick="window.downloadStudentInvoice('${item.id}', '${item.plan.replace(/'/g, "\\'")}', ${item.amount}, '${item.date}', '${item.mode}', '${item.period}', '${item.txnId}')" style="padding:3px 8px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Invoice</button>`
-        : `<span style="font-size:11px; color:var(--text-muted); font-style:italic;">Pending Approval</span>`;
+      const invoiceCell = isPayLater
+        ? `<div style="display:inline-flex; align-items:center; gap:6px;">
+             <span style="font-size:11px; font-weight:600; color:#b45309; background:#fef3c7; padding:2px 8px; border-radius:4px; display:inline-block; border:1px solid #fcd34d;">Payment Due</span>
+             <button type="button" class="btn btn-primary btn-sm" onclick="window.openPayLaterModal()" style="padding:2px 8px; font-size:11px; font-weight:700; background:#16a34a; border-color:#16a34a; color:#fff; border-radius:4px; display:inline-flex; align-items:center;">Pay Fee</button>
+           </div>`
+        : (isApproved
+            ? `<button type="button" class="btn btn-secondary btn-sm" onclick="window.downloadStudentInvoice('${item.id}', '${item.plan.replace(/'/g, "\\'")}', ${item.amount}, '${item.date}', '${item.mode}', '${item.period}', '${item.txnId}')" style="padding:3px 8px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Invoice</button>`
+            : `<span style="font-size:11px; color:var(--text-muted); font-style:italic;">Pending Approval</span>`);
 
       unifiedHistoryHtml += `
         <tr>
@@ -1869,7 +2164,7 @@ const renderPortal = () => {
           <td class="amount">₹${item.amount}</td>
           <td><span class="badge" style="background:var(--bg-hover); color:var(--text-primary); font-size:11.5px; font-weight:600; border:1px solid var(--border);">${item.mode || 'UPI'}</span></td>
           <td style="font-size:0.85rem; font-family:monospace;">${item.txnId}</td>
-          <td><span class="badge ${badgeClass}">${item.status}</span></td>
+          <td><span class="badge ${badgeClass}">${displayStatus}</span></td>
           <td>${invoiceCell}</td>
           <td style="text-align:center;">${proofCell}</td>
         </tr>
@@ -2373,8 +2668,7 @@ const renderPortal = () => {
     const seatLabel = activeSession
       ? `${activeSession.seatNumber || "—"} (${activeSession.seatFloor || assignedFloor || "Ground Floor"})`
       : (assignedSeat ? `${assignedSeat} (${assignedFloor})` : "Not assigned");
-    const dueLabel = s.paymentDueDate
-      ? new Date(s.paymentDueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "N/A";
+    // dueLabel declared at top of renderPortal
     const dueUrgent = daysRemaining <= 5;
     const subscriptionLeft = formatSubscriptionLeft(daysRemaining);
 
@@ -2453,12 +2747,52 @@ const renderPortal = () => {
             <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">${isExpired ? `Ended ${dueLabel} · Access locked` : `Due ${dueLabel} · ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}${pendingPayments.length ? ` · ${pendingPayments.length} pending` : " · all clear"}`}</div>
           </div>
           <div style="margin-top:auto; padding-top:0.75rem; width:100%; display:flex; justify-content:center;">
+            ${studentOwesPayLater ? `
+            <button class="btn btn-primary btn-sm" onclick="window.openPayLaterModal()" style="font-size:0.75rem; width:100%; justify-content:center; background:#16a34a; border-color:#16a34a; color:#fff; font-weight:700;">
+              Pay Admission Fee
+            </button>
+          ` : `
             <button class="btn ${isExpired || dueUrgent ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="navigate('student-payments')" style="font-size:0.75rem; width:100%; justify-content:center; ${isExpired || dueUrgent ? 'background:var(--danger); border-color:var(--danger); color:#fff;' : ''}">
               ${isExpired ? 'Pay Debt & Renew' : (dueUrgent ? 'Renew Now' : 'Payment History')}
             </button>
+          `}
           </div>
         </div>
       </div>
+
+      ${studentOwesPayLater ? `
+        <div class="sp-alert sp-alert-warn" style="margin-top:1.25rem; padding:16px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(245,158,11,0.14), rgba(217,119,6,0.06)); border:1.5px solid rgba(245,158,11,0.4); display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
+          <div style="display:flex; gap:14px; align-items:center;">
+            <div style="width:40px; height:40px; border-radius:50%; background:rgba(245,158,11,0.2); color:#f59e0b; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
+            </div>
+            <div>
+              <div style="font-weight:700; font-size:15px; color:var(--text-primary);">Admission Fee Pending (Pay Later)</div>
+              <div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">
+                Outstanding fee: <strong style="color:var(--text-primary);">₹${s.amount || s.planPrice || s.fee || 1000}</strong> for <strong>${s.planName || 'Regular Fixed Seat'}</strong> (Due: ${dueLabel}). Please submit payment to clear your dues.
+              </div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" onclick="window.openPayLaterModal()" style="font-weight:700; padding:8px 18px; border-radius:8px; background:#16a34a; border-color:#16a34a; color:#fff; display:inline-flex; align-items:center; gap:6px;">
+            Pay Fee Now
+          </button>
+        </div>
+      ` : (pendingPayLaterPayment ? `
+        <div class="sp-alert sp-alert-warn" style="margin-top:1.25rem; padding:16px 20px; border-radius:14px; background:linear-gradient(135deg, rgba(245,158,11,0.14), rgba(217,119,6,0.06)); border:1.5px solid rgba(245,158,11,0.4); display:flex; gap:16px; align-items:flex-start;">
+          <div style="width:36px; height:36px; border-radius:50%; background:rgba(245,158,11,0.2); color:#f59e0b; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div style="flex:1;">
+            <div style="font-weight:700; font-size:15px; color:var(--text-primary); margin-bottom:4px;">Admission Payment Under Verification</div>
+            <div style="font-size:13px; color:var(--text-secondary); line-height:1.5;">
+              Your payment of <strong style="color:var(--text-primary);">₹${pendingPayLaterPayment.amount}</strong> via <strong>${pendingPayLaterPayment.paymentMethod || 'UPI'}</strong> (Txn/UTR: <code style="font-family:monospace; background:var(--bg-card); padding:2px 6px; border-radius:4px; font-weight:700; border:1px solid var(--border);">${pendingPayLaterPayment.transactionId}</code>) was received and is currently under verification by admin. E-Invoice will be unlocked upon approval.
+            </div>
+            <div style="margin-top:10px;">
+              <button class="btn btn-ghost btn-sm" onclick="navigate('student-payments')" style="font-size:12px; padding:4px 12px; border:1px solid var(--border); border-radius:6px; color:var(--text-primary);">View Status on Payments Page</button>
+            </div>
+          </div>
+        </div>
+      ` : '')}
 
       ${isExpired ? `
         ${pendingPayment ? `
@@ -2662,6 +2996,28 @@ const renderPortal = () => {
       <div class="sp-stack" style="margin-top:0;">
         ${paymentsPageBannerHtml}
 
+        ${studentOwesPayLater ? `
+        <!-- Outstanding Admission Fee Card -->
+        <div class="card" style="margin-bottom:1.5rem; border:2px solid #16a34a; background:linear-gradient(180deg, rgba(22,163,74,0.05) 0%, rgba(22,163,74,0.01) 100%); border-radius:14px; padding:1.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+              <div style="width:44px; height:44px; border-radius:12px; background:rgba(22,163,74,0.12); color:#16a34a; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
+              </div>
+              <div>
+                <h3 style="margin:0; font-size:1.15rem; font-weight:700; color:var(--text-primary);">Pay Outstanding Admission Fee (Pay Later)</h3>
+                <div style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+                  You have an outstanding fee of <strong>₹${s.amount || s.planPrice || s.fee || 1000}</strong> for your current <strong>${s.planName || 'Regular Fixed Seat'}</strong> (Due Date: ${dueLabel}).
+                </div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary" onclick="window.openPayLaterModal()" style="background:#16a34a; border-color:#16a34a; color:#fff; font-weight:700; padding:10px 22px; font-size:14px; border-radius:8px; display:inline-flex; align-items:center; gap:6px;">
+              Pay Fee Now
+            </button>
+          </div>
+        </div>
+        ` : ''}
+
         <!-- Submit Payment Request -->
         <div class="card sp-renew-card">
           <div style="display: flex; align-items: center; margin-bottom: 1.5rem; gap: 0.75rem; color: var(--primary);">
@@ -2673,7 +3029,7 @@ const renderPortal = () => {
           <div class="sp-alert sp-alert-warn">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             <div>
-              <div class="sp-alert-title">⚠ ${_monthsOwed} Unpaid Month${_monthsOwed > 1 ? 's' : ''} Detected</div>
+              <div class="sp-alert-title">${_monthsOwed} Unpaid Month${_monthsOwed > 1 ? 's' : ''} Detected</div>
               <div>Your fees are overdue. You must clear them <strong>one month at a time</strong>, starting from the oldest. Currently paying for: <strong>${_nextMonthLabel}</strong>.</div>
             </div>
           </div>
@@ -2745,9 +3101,9 @@ const renderPortal = () => {
                 <div class="sp-duration-row" style="display:grid; grid-template-columns: 1.4fr 1fr; gap:10px; align-items:center;">
                   <div>
                     <select id="student-duration-mode" onchange="window.onStudentRenewalModeChange()" class="sp-input" style="width:100%; padding:10px; border-radius:8px;">
-                      <option value="monthly" selected>📅 Monthly</option>
-                      <option value="days">📅 Days</option>
-                      <option value="custom">📅 Custom Date</option>
+                      <option value="monthly" selected>Monthly</option>
+                      <option value="days">Days</option>
+                      <option value="custom">Custom Date</option>
                     </select>
                   </div>
                   <div id="student-duration-val-wrap" style="display:flex; align-items:center; gap:8px;">
