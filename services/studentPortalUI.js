@@ -2163,7 +2163,11 @@ const renderPortal = () => {
           <td style="font-size:0.85rem; color:var(--text-secondary);">${item.period}</td>
           <td class="amount">₹${item.amount}</td>
           <td><span class="badge" style="background:var(--bg-hover); color:var(--text-primary); font-size:11.5px; font-weight:600; border:1px solid var(--border);">${item.mode || 'UPI'}</span></td>
-          <td style="font-size:0.85rem; font-family:monospace;">${item.txnId}</td>
+          <td style="font-size:0.85rem; font-family:monospace;">${(() => {
+            const raw = String(item.txnId || "").trim();
+            const isJunk = !raw || /^(rc-imp|rc-n\/a|cash|pay later|undefined|null|none|admission)$/i.test(raw) || raw.toLowerCase().startsWith("rc-");
+            return isJunk ? "—" : raw;
+          })()}</td>
           <td><span class="badge ${badgeClass}">${displayStatus}</span></td>
           <td>${invoiceCell}</td>
           <td style="text-align:center;">${proofCell}</td>

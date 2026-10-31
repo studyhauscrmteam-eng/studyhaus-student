@@ -238,7 +238,11 @@ export const resolveReceiptData = async (input = {}) => {
   const isCheque = modeStr.includes("cheque") || modeStr.includes("check");
   const isOnline = !isCash && !isCheque;
 
-  const transactionId = String(payment.transactionId || "").trim();
+  const rawTxn = String(payment.transactionId || "").trim();
+  const isPlaceholderTxn = !rawTxn ||
+    /^(rc-imp|rc-n\/a|cash|n\/a|none|null|undefined|pay\s*later|admission)$/i.test(rawTxn) ||
+    rawTxn.toLowerCase().startsWith("rc-");
+  const transactionId = isPlaceholderTxn ? "" : rawTxn;
 
   // Load Settings (QR Code & Signature)
   let settings = {};
@@ -316,7 +320,7 @@ export const getReceiptSlipHTML = (data) => {
       user-select: text;
     ">
       <!-- Top Header: Shaded background (#dce5ef) spanning full width, Logo (Left) | Shreeji Gujarati (Center) | Contact Details (Right) -->
-      <div style="background: #dce5ef; margin: -14px -16px 12px -16px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box;">
+      <div style="background: #dce5ef; margin: -14px -16px 12px -16px; padding: 12px 18px 16px 18px; border-bottom: 1px solid #0f3b6c; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box;">
         <!-- Left: Official Website Logo (Uncropped) -->
         <div style="width: 175px; display: flex; align-items: center; justify-content: flex-start;">
           <img src="${data.logoUrl}" alt="Shreeji Reading Library" style="height: 60px; max-width: 170px; object-fit: contain; mix-blend-mode: multiply;" onerror="this.onerror=null; if(this.src.indexOf('../')!==-1){this.src='./assets/logo.jpg';}else{this.src='../assets/logo.jpg';}" />
@@ -344,7 +348,7 @@ export const getReceiptSlipHTML = (data) => {
               <span>${data.contactPhone}</span>
             </div>
             <div style="font-size: 10px; color: #1e293b; font-weight: 600; line-height: 1.35; display: flex; align-items: flex-start; gap: 7px;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0f3b6c" stroke-width="2.5" style="margin-top:2px; flex-shrink:0;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0f3b6c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:1px; flex-shrink:0;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
               <div style="display: flex; flex-direction: column; align-items: flex-start;">
                 <span style="white-space: nowrap;">${data.addressLine1}</span>
                 <span style="white-space: nowrap;">${data.addressLine2}</span>
@@ -393,20 +397,20 @@ export const getReceiptSlipHTML = (data) => {
       </div>
 
       <!-- Table: Sr | Particulars | Amount -->
-      <table style="width: 100%; border-collapse: collapse; border: 1px solid #0f3b6c; margin-bottom: 10px;">
+      <table style="width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid #0f3b6c; margin-bottom: 10px;">
         <thead>
           <tr style="background: #e8edf4; color: #0f3b6c; font-weight: 800; font-size: 13.5px;">
-            <th style="width: 10%; border: 1px solid #0f3b6c; padding: 6px 4px; text-align: center;">ક્રમ</th>
-            <th style="width: 68%; border: 1px solid #0f3b6c; padding: 6px 12px; text-align: center;">વિગત</th>
-            <th style="width: 22%; border: 1px solid #0f3b6c; padding: 6px 10px; text-align: center;">રકમ</th>
+            <th style="width: 10%; border-bottom: 1px solid #0f3b6c; border-right: 1px solid #0f3b6c; padding: 6px 4px; text-align: center;">ક્રમ</th>
+            <th style="width: 68%; border-bottom: 1px solid #0f3b6c; border-right: 1px solid #0f3b6c; padding: 6px 12px; text-align: center;">વિગત</th>
+            <th style="width: 22%; border-bottom: 1px solid #0f3b6c; padding: 6px 10px; text-align: center;">રકમ</th>
           </tr>
         </thead>
         <tbody>
           <tr style="min-height: 90px;">
-            <td style="border: 1px solid #0f3b6c; padding: 12px 6px; text-align: center; vertical-align: top; font-weight: 700; font-size: 14px;">
+            <td style="border-bottom: 1px solid #0f3b6c; border-right: 1px solid #0f3b6c; padding: 12px 6px; text-align: center; vertical-align: top; font-weight: 700; font-size: 14px;">
               1
             </td>
-            <td style="border: 1px solid #0f3b6c; padding: 12px 16px; vertical-align: top; font-size: 13.5px; line-height: 1.6;">
+            <td style="border-bottom: 1px solid #0f3b6c; border-right: 1px solid #0f3b6c; padding: 12px 16px; vertical-align: top; font-size: 13.5px; line-height: 1.6;">
               <div style="display: flex; align-items: center; gap: 24px; margin-bottom: 6px; font-size: 13.5px;">
                 <span><strong style="color: #0f3b6c;">તા.</strong> ${data.startDate || '—'}</span>
                 <span style="font-weight: 700; color: #0f3b6c;">થી</span>
@@ -432,16 +436,16 @@ export const getReceiptSlipHTML = (data) => {
                 </span>
               </div>
             </td>
-            <td style="border: 1px solid #0f3b6c; padding: 12px 14px; text-align: right; vertical-align: top; font-weight: 700; font-size: 15px; color: #0f172a;">
+            <td style="border-bottom: 1px solid #0f3b6c; padding: 12px 14px; text-align: right; vertical-align: top; font-weight: 700; font-size: 15px; color: #0f172a;">
               ${data.formattedAmount}
             </td>
           </tr>
           <!-- Total Row -->
           <tr style="background: #ffffff;">
-            <td colspan="2" style="border: 1px solid #0f3b6c; padding: 6px 16px; text-align: right; font-weight: 800; font-size: 14px; color: #0f3b6c;">
+            <td colspan="2" style="border-right: 1px solid #0f3b6c; padding: 6px 16px; text-align: right; font-weight: 800; font-size: 14px; color: #0f3b6c;">
               કુલ રૂા.
             </td>
-            <td style="border: 1px solid #0f3b6c; padding: 6px 14px; text-align: right; font-weight: 900; font-size: 16px; color: #0f172a;">
+            <td style="padding: 6px 14px; text-align: right; font-weight: 900; font-size: 16px; color: #0f172a;">
               ${data.formattedAmount}
             </td>
           </tr>

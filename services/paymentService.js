@@ -109,6 +109,8 @@ export const submitPayLaterPayment = async (student, transactionId, amount, paym
     const currentUid = (auth && auth.currentUser) ? auth.currentUser.uid : (student.uid || student.id || "");
     const sAmt = Number(amount) || Number(student.amount || student.planPrice || student.fee || 1000);
 
+    const targetDocId = student.lastPayLaterPaymentId || ("adm_" + (student.id || currentUid));
+
     const paymentData = {
       studentId: currentUid || student.id,
       studentUid: currentUid || student.uid || student.id,
@@ -124,15 +126,18 @@ export const submitPayLaterPayment = async (student, transactionId, amount, paym
       paymentScreenshotUrl: isCash ? "" : singleShot,
       screenshots: (!isCash && singleShot) ? [singleShot] : [],
       source: "pay_later",
+      isPayLater: true,
       status: "pending",
       startDate: student.startDate || "",
       endDate: student.endDate || student.paymentDueDate || "",
       dueDateStr: student.endDate || student.paymentDueDate || "",
       date: new Date().toISOString(),
-      createdAt: serverTimestamp()
+      updatedAt: serverTimestamp(),
+      lastSubmittedAt: serverTimestamp()
     };
 
-    const docRef = await addDoc(collection(db, "payments"), paymentData);
+    await setDoc(doc(db, "payments", targetDocId), paymentData, { merge: true });
+    const docRef = { id: targetDocId };
 
     // Record uniqueness claim for UPI payments
     if (!isCash && cleanTxn !== "CASH" && currentUid) {
